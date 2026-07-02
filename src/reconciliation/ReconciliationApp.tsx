@@ -117,6 +117,7 @@ export function ReconciliationApp() {
   const [filters, setFilters] = useState<Filters>(emptyFilters);
   const [draftFilters, setDraftFilters] = useState<Filters>(emptyFilters);
   const [modal, setModal] = useState<ModalState>(null);
+  const usesEmptyInitialData = reconciliationRepository.usesEmptyInitialData();
 
   useEffect(() => {
     reconciliationRepository.save(store);
@@ -872,7 +873,10 @@ export function ReconciliationApp() {
   }
 
   function resetDemoData() {
-    if (!window.confirm("确认恢复为系统示例数据吗？当前本地数据会被覆盖。")) return;
+    const confirmMessage = usesEmptyInitialData
+      ? "确认清空当前本地对账数据吗？此操作会清空当前浏览器里的客户、对账、收款和开票数据。"
+      : "确认恢复为系统示例数据吗？当前本地数据会被覆盖。";
+    if (!window.confirm(confirmMessage)) return;
     const initialStore = reconciliationRepository.reset();
     setStore(initialStore);
     setSelectedCustomerId(initialStore.customers[0]?.id ?? "");
@@ -910,7 +914,7 @@ export function ReconciliationApp() {
 
         <div className="recon-sidebar-foot">
           <span>本地 MVP</span>
-          <button onClick={resetDemoData} title="恢复示例数据" type="button">
+          <button onClick={resetDemoData} title={usesEmptyInitialData ? "清空本地数据" : "恢复示例数据"} type="button">
             <RotateCcw size={16} />
           </button>
         </div>

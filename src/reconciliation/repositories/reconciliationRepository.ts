@@ -14,15 +14,47 @@ import { sumMoney } from "../services/accounting";
 
 const STORAGE_KEY = "zhenlin.customer-reconciliation.v2";
 const LEGACY_STORAGE_KEY = "zhenlin.customer-reconciliation.v1";
+const RESET_VERSION_STORAGE_KEY = "zhenlin.customer-reconciliation.reset-version";
+const env = (import.meta as ImportMeta & { env?: Record<string, string | undefined> }).env ?? {};
+const USE_EMPTY_INITIAL_DATA = env.VITE_EMPTY_INITIAL_RECONCILIATION === "true";
+const DATA_RESET_VERSION = env.VITE_RECONCILIATION_DATA_RESET_VERSION ?? "";
 
 export type ReconciliationRepository = {
   load(): ReconciliationStore;
   save(store: ReconciliationStore): void;
   reset(): ReconciliationStore;
+  usesEmptyInitialData(): boolean;
 };
 
 function cloneStore(store: ReconciliationStore): ReconciliationStore {
   return JSON.parse(JSON.stringify(store)) as ReconciliationStore;
+}
+
+function createEmptyStore(): ReconciliationStore {
+  return {
+    customers: [],
+    customerProfiles: [],
+    styleAccounts: [],
+    monthlyStatements: [],
+    statementItems: [],
+    statementAdjustments: [],
+    customerReceipts: [],
+    receiptAllocations: [],
+  };
+}
+
+function createInitialStore(): ReconciliationStore {
+  return USE_EMPTY_INITIAL_DATA ? createEmptyStore() : cloneStore(seedReconciliationStore);
+}
+
+function shouldResetStoredDataForBuild(): boolean {
+  return USE_EMPTY_INITIAL_DATA && DATA_RESET_VERSION !== "" && window.localStorage.getItem(RESET_VERSION_STORAGE_KEY) !== DATA_RESET_VERSION;
+}
+
+function markStoredDataResetForBuild() {
+  if (USE_EMPTY_INITIAL_DATA && DATA_RESET_VERSION !== "") {
+    window.localStorage.setItem(RESET_VERSION_STORAGE_KEY, DATA_RESET_VERSION);
+  }
 }
 
 function isFullStore(store: Partial<ReconciliationStore>): store is ReconciliationStore {
@@ -194,6 +226,13 @@ function normalizeStore(store: ReconciliationStore): ReconciliationStore {
 export const reconciliationRepository: ReconciliationRepository = {
   load() {
     try {
+      if (shouldResetStoredDataForBuild()) {
+        const initialStore = createInitialStore();
+        this.save(initialStore);
+        markStoredDataResetForBuild();
+        return initialStore;
+      }
+
       const rawStore = window.localStorage.getItem(STORAGE_KEY);
       if (rawStore) {
         const parsedStore = JSON.parse(rawStore) as Partial<ReconciliationStore>;
@@ -211,11 +250,11 @@ export const reconciliationRepository: ReconciliationRepository = {
         return migratedStore;
       }
 
-      const initialStore = cloneStore(seedReconciliationStore);
+      const initialStore = createInitialStore();
       this.save(initialStore);
       return initialStore;
     } catch {
-      const initialStore = cloneStore(seedReconciliationStore);
+      const initialStore = createInitialStore();
       this.save(initialStore);
       return initialStore;
     }
@@ -224,8 +263,12 @@ export const reconciliationRepository: ReconciliationRepository = {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
   },
   reset() {
-    const initialStore = cloneStore(seedReconciliationStore);
+    const initialStore = createInitialStore();
     this.save(initialStore);
+    markStoredDataResetForBuild();
     return initialStore;
+  },
+  usesEmptyInitialData() {
+    return USE_EMPTY_INITIAL_DATA;
   },
 };
