@@ -8,12 +8,12 @@ build/
 *.tsbuildinfo
 vite-dev.*.log
 *.log
-data/
-server/data/
+/data/
+/server/data/
 *.sqlite
 *.sqlite3
 *.db
-data/*.sqlite
-data/*.db
+/data/*.sqlite
+/data/*.db
 uploads/
 .DS_Store
