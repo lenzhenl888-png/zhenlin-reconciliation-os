@@ -46,6 +46,7 @@ import {
   customerProfileStatusOptions,
   customerTypeOptions,
   paymentMethods,
+  statementStatusOptions,
 } from "./models";
 import { reconciliationRepository } from "./repositories/reconciliationRepository";
 import {
@@ -65,6 +66,7 @@ import {
   getReceiptAllocatedAmount,
   parseMoney,
   roundMoney,
+  sumMoney,
   summarizeAll,
   summarizeCustomer,
   summarizeStatement,
@@ -1986,45 +1988,122 @@ function ProfileSelect<TValue extends string>(props: {
 }
 
 function OverviewModule(props: { customers: Customer[]; store: Parameters<typeof summarizeAll>[1]; summary: ReturnType<typeof summarizeAll> }) {
-  const rows = props.customers.map((customer) => summarizeCustomer(customer, props.store));
+  const [customerId, setCustomerId] = useState("");
+  const [periodMonth, setPeriodMonth] = useState("");
+  const [status, setStatus] = useState<StatementStatus | "">("");
+  const periodOptions = getAvailablePeriods(props.store);
+  const statementSummaries = props.store.monthlyStatements
+    .map((statement) => summarizeStatement(statement, props.store))
+    .filter((summary) => {
+      const matchesCustomer = !customerId || summary.statement.customerId === customerId;
+      const matchesPeriod = !periodMonth || summary.statement.periodMonth === periodMonth;
+      const matchesStatus = !status || summary.status === status;
+      return matchesCustomer && matchesPeriod && matchesStatus;
+    });
+  const filteredSummary = {
+    receivableTotal: sumMoney(statementSummaries.map((item) => item.currentReceivable)),
+    invoicedTotal: sumMoney(statementSummaries.map((item) => item.currentInvoiced)),
+    paidTotal: sumMoney(statementSummaries.map((item) => item.currentReceived)),
+    unpaidAmount: sumMoney(statementSummaries.map((item) => item.closingBalance)),
+  };
+
   return (
     <div className="recon-workspace">
       <section className="recon-stat-grid">
-        <StatCard label="应收总额" value={props.summary.receivableTotal} icon={Banknote} />
-        <StatCard label="已开票总额" value={props.summary.invoicedTotal} icon={ReceiptText} />
-        <StatCard label="已收款总额" value={props.summary.paidTotal} icon={CreditCard} />
-        <StatCard label="总未收余额" value={props.summary.unpaidAmount} icon={BarChart3} tone="warning" />
+        <StatCard label="应收总额" value={filteredSummary.receivableTotal} icon={Banknote} />
+        <StatCard label="已开票总额" value={filteredSummary.invoicedTotal} icon={ReceiptText} />
+        <StatCard label="已收款总额" value={filteredSummary.paidTotal} icon={CreditCard} />
+        <StatCard label="未收余额" value={filteredSummary.unpaidAmount} icon={BarChart3} tone="warning" />
       </section>
       <section className="recon-simple-panel">
         <div className="recon-panel-head">
           <div>
             <span>客户月度余额总览</span>
-            <strong>所有月度对账单期末余额合计</strong>
+            <strong>{statementSummaries.length} 张月度对账单</strong>
           </div>
+        </div>
+        <div className="module-filter-grid">
+          <label>
+            客户
+            <select onChange={(event) => setCustomerId(event.target.value)} value={customerId}>
+              <option value="">全部客户</option>
+              {props.customers.map((customer) => (
+                <option key={customer.id} value={customer.id}>
+                  {customer.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            对账月份
+            <select onChange={(event) => setPeriodMonth(event.target.value)} value={periodMonth}>
+              <option value="">全部月份</option>
+              {periodOptions.map((period) => (
+                <option key={period} value={period}>
+                  {period}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            状态
+            <select onChange={(event) => setStatus(event.target.value as StatementStatus | "")} value={status}>
+              <option value="">全部状态</option>
+              {statementStatusOptions.map((option) => (
+                <option key={option} value={option}>
+                  {option}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            className="recon-button recon-button-light"
+            onClick={() => {
+              setCustomerId("");
+              setPeriodMonth("");
+              setStatus("");
+            }}
+            type="button"
+          >
+            重置
+          </button>
         </div>
         <table className="recon-table">
           <thead>
             <tr>
               <th>客户</th>
-              <th>月度单数量</th>
+              <th>对账月份</th>
+              <th>状态</th>
               <th>款号数量</th>
-              <th>本月应收合计</th>
-              <th>已收合计</th>
-              <th>期末余额合计</th>
+              <th>本月应收</th>
+              <th>已开票</th>
+              <th>已收款</th>
+              <th>期末余额</th>
             </tr>
           </thead>
           <tbody>
-            {rows.map((row) => (
-              <tr key={row.customerId}>
-                <td>{row.customerName}</td>
-                <td>{row.statementCount}</td>
-                <td>{row.styleCount}</td>
-                <td>¥ {formatMoney(row.receivableTotal)}</td>
-                <td>¥ {formatMoney(row.paidTotal)}</td>
-                <td className={row.closingBalanceTotal > 0 ? "is-danger" : "is-ok"}>¥ {formatMoney(row.closingBalanceTotal)}</td>
+            {statementSummaries.map((row) => (
+              <tr key={row.statement.id}>
+                <td>{getCustomerDisplayName(row.statement.customerId, props.store)}</td>
+                <td>{row.statement.periodMonth}</td>
+                <td>{row.status}</td>
+                <td>{row.items.length}</td>
+                <td>¥ {formatMoney(row.currentReceivable)}</td>
+                <td>¥ {formatMoney(row.currentInvoiced)}</td>
+                <td>¥ {formatMoney(row.currentReceived)}</td>
+                <td className={row.closingBalance > 0 ? "is-danger" : "is-ok"}>¥ {formatMoney(row.closingBalance)}</td>
               </tr>
             ))}
           </tbody>
+          <tfoot>
+            <tr>
+              <td colSpan={4}>当前合计</td>
+              <td>¥ {formatMoney(filteredSummary.receivableTotal)}</td>
+              <td>¥ {formatMoney(filteredSummary.invoicedTotal)}</td>
+              <td>¥ {formatMoney(filteredSummary.paidTotal)}</td>
+              <td className={filteredSummary.unpaidAmount > 0 ? "is-danger" : "is-ok"}>¥ {formatMoney(filteredSummary.unpaidAmount)}</td>
+            </tr>
+          </tfoot>
         </table>
       </section>
     </div>
@@ -2039,11 +2118,25 @@ function ReceiptPoolModule(props: {
   receipts: CustomerReceipt[];
 }) {
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
+  const [periodMonth, setPeriodMonth] = useState("");
+  const [method, setMethod] = useState<PaymentMethod | "">("");
+  const [keyword, setKeyword] = useState("");
+  const receiptPeriodOptions = Array.from(new Set(props.receipts.map((receipt) => receipt.periodMonth || receipt.receiptDate.slice(0, 7))))
+    .filter(Boolean)
+    .sort()
+    .reverse();
   const filteredReceipts = selectedCustomerId
     ? props.receipts.filter((receipt) => receipt.customerId === selectedCustomerId)
     : props.receipts;
-  const totalAmount = filteredReceipts.reduce((sum, receipt) => sum + receipt.amount, 0);
-  const totalAllocated = filteredReceipts.reduce((sum, receipt) => sum + getReceiptAllocatedAmount(receipt.id, props.allocations), 0);
+  const visibleReceipts = filteredReceipts.filter((receipt) => {
+    const text = `${receipt.transactionNo ?? ""} ${receipt.note ?? ""}`.toLowerCase();
+    const matchesPeriod = !periodMonth || (receipt.periodMonth || receipt.receiptDate.slice(0, 7)) === periodMonth;
+    const matchesMethod = !method || receipt.method === method;
+    const matchesKeyword = !keyword.trim() || text.includes(keyword.trim().toLowerCase());
+    return matchesPeriod && matchesMethod && matchesKeyword;
+  });
+  const totalAmount = visibleReceipts.reduce((sum, receipt) => sum + receipt.amount, 0);
+  const totalAllocated = visibleReceipts.reduce((sum, receipt) => sum + getReceiptAllocatedAmount(receipt.id, props.allocations), 0);
   const totalUnallocated = totalAmount - totalAllocated;
 
   async function importReceiptFile(event: ChangeEvent<HTMLInputElement>) {
@@ -2064,7 +2157,7 @@ function ReceiptPoolModule(props: {
       <div className="recon-panel-head">
         <div>
           <span>全部收款记录</span>
-          <strong>{filteredReceipts.length} 笔收款</strong>
+          <strong>{visibleReceipts.length} 笔收款</strong>
         </div>
         <label className="recon-button recon-button-primary payment-import-trigger">
           <Upload size={16} />
@@ -2072,7 +2165,7 @@ function ReceiptPoolModule(props: {
           <input accept=".xlsx,.csv" onChange={importReceiptFile} type="file" />
         </label>
       </div>
-      <div className="receipt-module-filter">
+      <div className="module-filter-grid">
         <label>
           客户
           <select onChange={(event) => setSelectedCustomerId(event.target.value)} value={selectedCustomerId}>
@@ -2084,6 +2177,44 @@ function ReceiptPoolModule(props: {
             ))}
           </select>
         </label>
+        <label>
+          归属账期
+          <select onChange={(event) => setPeriodMonth(event.target.value)} value={periodMonth}>
+            <option value="">全部账期</option>
+            {receiptPeriodOptions.map((period) => (
+              <option key={period} value={period}>
+                {period}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          收款方式
+          <select onChange={(event) => setMethod(event.target.value as PaymentMethod | "")} value={method}>
+            <option value="">全部方式</option>
+            {paymentMethods.map((option) => (
+              <option key={option} value={option}>
+                {option}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          流水号 / 备注
+          <input onChange={(event) => setKeyword(event.target.value)} placeholder="输入关键词" value={keyword} />
+        </label>
+        <button
+          className="recon-button recon-button-light"
+          onClick={() => {
+            setSelectedCustomerId("");
+            setPeriodMonth("");
+            setMethod("");
+            setKeyword("");
+          }}
+          type="button"
+        >
+          重置
+        </button>
       </div>
       <table className="recon-table">
         <thead>
@@ -2101,7 +2232,7 @@ function ReceiptPoolModule(props: {
           </tr>
         </thead>
         <tbody>
-          {filteredReceipts.map((receipt) => {
+          {visibleReceipts.map((receipt) => {
             const allocated = getReceiptAllocatedAmount(receipt.id, props.allocations);
             return (
               <tr key={receipt.id}>
@@ -2211,6 +2342,10 @@ function SettingsModule() {
 }
 
 function InvoiceRecordsModule(props: { customers: Customer[]; styleAccounts: StyleAccount[] }) {
+  const [customerId, setCustomerId] = useState("");
+  const [periodMonth, setPeriodMonth] = useState("");
+  const [styleKeyword, setStyleKeyword] = useState("");
+  const [invoiceKeyword, setInvoiceKeyword] = useState("");
   const rows = props.styleAccounts.flatMap((account) =>
     account.invoiceRecords.map((record) => ({
       account,
@@ -2218,13 +2353,69 @@ function InvoiceRecordsModule(props: { customers: Customer[]; styleAccounts: Sty
       record,
     })),
   );
+  const periodOptions = Array.from(new Set(rows.map((row) => row.record.date.slice(0, 7)))).sort().reverse();
+  const filteredRows = rows.filter(({ account, record }) => {
+    const matchesCustomer = !customerId || account.customerId === customerId;
+    const matchesPeriod = !periodMonth || record.date.slice(0, 7) === periodMonth;
+    const matchesStyle = !styleKeyword.trim() || account.styleNo.toLowerCase().includes(styleKeyword.trim().toLowerCase());
+    const matchesInvoice =
+      !invoiceKeyword.trim() ||
+      `${record.invoiceNo} ${record.remark ?? ""}`.toLowerCase().includes(invoiceKeyword.trim().toLowerCase());
+    return matchesCustomer && matchesPeriod && matchesStyle && matchesInvoice;
+  });
+  const totalAmount = filteredRows.reduce((sum, row) => sum + row.record.amount, 0);
+
   return (
     <section className="recon-simple-panel">
       <div className="recon-panel-head">
         <div>
           <span>全部开票记录</span>
-          <strong>{rows.length} 条记录</strong>
+          <strong>{filteredRows.length} 条记录</strong>
         </div>
+      </div>
+      <div className="module-filter-grid">
+        <label>
+          客户
+          <select onChange={(event) => setCustomerId(event.target.value)} value={customerId}>
+            <option value="">全部客户</option>
+            {props.customers.map((customer) => (
+              <option key={customer.id} value={customer.id}>
+                {customer.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          开票月份
+          <select onChange={(event) => setPeriodMonth(event.target.value)} value={periodMonth}>
+            <option value="">全部月份</option>
+            {periodOptions.map((period) => (
+              <option key={period} value={period}>
+                {period}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          款号
+          <input onChange={(event) => setStyleKeyword(event.target.value)} placeholder="输入款号" value={styleKeyword} />
+        </label>
+        <label>
+          发票号 / 备注
+          <input onChange={(event) => setInvoiceKeyword(event.target.value)} placeholder="输入关键词" value={invoiceKeyword} />
+        </label>
+        <button
+          className="recon-button recon-button-light"
+          onClick={() => {
+            setCustomerId("");
+            setPeriodMonth("");
+            setStyleKeyword("");
+            setInvoiceKeyword("");
+          }}
+          type="button"
+        >
+          重置
+        </button>
       </div>
       <table className="recon-table">
         <thead>
@@ -2238,7 +2429,7 @@ function InvoiceRecordsModule(props: { customers: Customer[]; styleAccounts: Sty
           </tr>
         </thead>
         <tbody>
-          {rows.map(({ account, customer, record }) => (
+          {filteredRows.map(({ account, customer, record }) => (
             <tr key={record.id}>
               <td>{customer?.name ?? "-"}</td>
               <td>{account.styleNo}</td>
@@ -2249,6 +2440,13 @@ function InvoiceRecordsModule(props: { customers: Customer[]; styleAccounts: Sty
             </tr>
           ))}
         </tbody>
+        <tfoot>
+          <tr>
+            <td colSpan={4}>当前合计</td>
+            <td>¥ {formatMoney(totalAmount)}</td>
+            <td></td>
+          </tr>
+        </tfoot>
       </table>
     </section>
   );
