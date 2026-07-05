@@ -123,9 +123,11 @@ export function ReconciliationApp() {
   const [modal, setModal] = useState<ModalState>(null);
   const [cloudStatus, setCloudStatus] = useState<CloudStatus>("loading");
   const [cloudNotice, setCloudNotice] = useState("正在同步云端数据...");
+  const [showCloudNotice, setShowCloudNotice] = useState(true);
   const cloudReadyRef = useRef(false);
   const latestSaveIdRef = useRef(0);
-  const usesEmptyInitialData = reconciliationRepository.usesEmptyInitialData();
+  const isLocalDevelopment = ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
+  const currentUserLabel = isLocalDevelopment ? "本地开发" : auth.user?.displayName || auth.user?.username;
 
   useEffect(() => {
     reconciliationRepository.save(store);
@@ -133,6 +135,8 @@ export function ReconciliationApp() {
     const saveId = latestSaveIdRef.current + 1;
     latestSaveIdRef.current = saveId;
     setCloudStatus("saving");
+    setCloudNotice("正在保存云端数据...");
+    setShowCloudNotice(true);
     const timer = window.setTimeout(() => {
       void reconciliationRepository
         .saveCloud(auth.token, store)
@@ -140,11 +144,14 @@ export function ReconciliationApp() {
           if (latestSaveIdRef.current !== saveId) return;
           setCloudStatus("ready");
           setCloudNotice("云端数据已保存");
+          setShowCloudNotice(true);
+          window.setTimeout(() => setShowCloudNotice(false), 1800);
         })
         .catch((error) => {
           if (latestSaveIdRef.current !== saveId) return;
           setCloudStatus("error");
           setCloudNotice(error instanceof Error ? error.message : "云端保存失败，本地数据已临时保留");
+          setShowCloudNotice(true);
           if (error instanceof Error && error.name === "SESSION_REPLACED") void auth.checkSession();
         });
     }, 500);
@@ -157,6 +164,7 @@ export function ReconciliationApp() {
     cloudReadyRef.current = false;
     setCloudStatus("loading");
     setCloudNotice("正在同步云端数据...");
+    setShowCloudNotice(true);
 
     async function loadCloudStore() {
       try {
@@ -181,11 +189,14 @@ export function ReconciliationApp() {
         cloudReadyRef.current = true;
         setCloudStatus("ready");
         setCloudNotice(shouldMigrateLocal ? "本地数据已合并上传到云端" : "已连接云端数据");
+        setShowCloudNotice(shouldMigrateLocal);
+        if (shouldMigrateLocal) window.setTimeout(() => setShowCloudNotice(false), 2200);
       } catch (error) {
         if (canceled) return;
         cloudReadyRef.current = false;
         setCloudStatus("error");
         setCloudNotice(error instanceof Error ? error.message : "云端数据同步失败，当前仍在使用本地数据");
+        setShowCloudNotice(true);
         if (error instanceof Error && error.name === "SESSION_REPLACED") void auth.checkSession();
       }
     }
@@ -765,10 +776,12 @@ export function ReconciliationApp() {
     window.alert(`收款导入完成：新增 ${addedCount} 笔，重复 ${duplicatedCount} 笔，跳过 ${skippedCount} 行。${warningText}`);
   }
 
-  function createAllocation(values: ReceiptAllocation) {
+  function createAllocation(values: ReceiptAllocation | ReceiptAllocation[]) {
+    const nextAllocations = Array.isArray(values) ? values : [values];
+    if (nextAllocations.length === 0) return;
     updateStore((currentStore) => ({
       ...currentStore,
-      receiptAllocations: [values, ...currentStore.receiptAllocations],
+      receiptAllocations: [...nextAllocations, ...currentStore.receiptAllocations],
     }));
   }
 
@@ -945,18 +958,6 @@ export function ReconciliationApp() {
     downloadWordDocument(`${selectedCustomerName}-${statement.periodMonth}-月度对账单.doc`, html);
   }
 
-  function resetDemoData() {
-    const confirmMessage = usesEmptyInitialData
-      ? "确认清空当前对账数据吗？登录状态下此操作会同步清空云端客户、对账、收款和开票数据。"
-      : "确认恢复为系统示例数据吗？当前本地数据会被覆盖。";
-    if (!window.confirm(confirmMessage)) return;
-    const initialStore = reconciliationRepository.reset();
-    setStore(initialStore);
-    setSelectedCustomerId(initialStore.customers[0]?.id ?? "");
-    setSelectedPeriod(getAvailablePeriods(initialStore)[0] ?? getCurrentPeriod());
-    setSelectedItemId("");
-  }
-
   return (
     <div className="recon-shell">
       <aside className="recon-sidebar">
@@ -987,9 +988,6 @@ export function ReconciliationApp() {
 
         <div className="recon-sidebar-foot">
           <span>本地 MVP</span>
-          <button onClick={resetDemoData} title={usesEmptyInitialData ? "清空本地数据" : "恢复示例数据"} type="button">
-            <RotateCcw size={16} />
-          </button>
         </div>
       </aside>
 
@@ -1002,7 +1000,7 @@ export function ReconciliationApp() {
           <div className="recon-userbar">
             <div>
               <span>当前用户</span>
-              <strong>{auth.user?.displayName || auth.user?.username}</strong>
+              <strong>{currentUserLabel}</strong>
             </div>
             <button className="recon-button recon-button-light" onClick={() => void auth.logout()} type="button">
               退出登录
@@ -1015,7 +1013,7 @@ export function ReconciliationApp() {
             当前账号仍在使用初始化密码，请尽快通过“系统设置”中的修改密码入口更换密码。
           </div>
         )}
-        <div className={`recon-cloud-notice is-${cloudStatus}`}>{cloudNotice}</div>
+        {showCloudNotice && <div className={`recon-cloud-notice is-${cloudStatus}`}>{cloudNotice}</div>}
 
         {activeModule === "customer" && (
           <CustomerStatementPanel
@@ -1294,9 +1292,13 @@ function CustomerStatementPanel(props: {
         <StatCard label="账单期初余额" value={props.selectedStatementSummary?.openingBalance ?? 0} icon={Banknote} />
         <StatCard label="实时期初余额" value={props.selectedStatementSummary?.realtimeOpeningBalance ?? 0} icon={RotateCcw} />
         <StatCard label="本月款号应收" value={props.selectedStatementSummary?.styleReceivableTotal ?? 0} icon={BarChart3} />
-        <StatCard label="本月调增" value={props.selectedStatementSummary?.increaseAdjustmentTotal ?? 0} icon={Plus} />
-        <StatCard label="本月扣款 / 调减" value={props.selectedStatementSummary?.decreaseAdjustmentTotal ?? 0} icon={ReceiptText} />
+        <StatCard
+          label="本月调整"
+          value={roundMoney((props.selectedStatementSummary?.increaseAdjustmentTotal ?? 0) - (props.selectedStatementSummary?.decreaseAdjustmentTotal ?? 0))}
+          icon={ReceiptText}
+        />
         <StatCard label="本月调整后应收" value={props.selectedStatementSummary?.adjustedReceivable ?? 0} icon={CreditCard} />
+        <StatCard label="本月已收款" value={props.selectedStatementSummary?.currentReceived ?? 0} icon={CreditCard} />
         <StatCard label="总合计" value={props.selectedStatementSummary?.grandTotal ?? 0} icon={Banknote} tone="warning" />
       </section>
 
@@ -2988,7 +2990,7 @@ function AllocationModal(props: {
   customerId: string;
   defaultStatementId?: string;
   onClose(): void;
-  onSubmit(allocation: ReceiptAllocation): void;
+  onSubmit(allocation: ReceiptAllocation | ReceiptAllocation[]): void;
   receiptAllocations: ReceiptAllocation[];
   receipts: CustomerReceipt[];
   statements: MonthlyStatement[];
@@ -3006,8 +3008,55 @@ function AllocationModal(props: {
   const remainingAmount = selectedReceipt
     ? roundMoney(selectedReceipt.amount - getReceiptAllocatedAmount(selectedReceipt.id, props.receiptAllocations))
     : 0;
+  const selectedItemSummary = statementSummary?.items.find((item) => item.item.styleAccountId === styleAccountId);
+  const statementUnpaidTotal = sumMoney((statementSummary?.items ?? []).map((item) => item.unpaidAmount));
+  const maxAssignableAmount = styleAccountId
+    ? roundMoney(Math.min(remainingAmount, selectedItemSummary?.unpaidAmount ?? 0))
+    : roundMoney(Math.min(remainingAmount, statementUnpaidTotal));
   const [amount, setAmount] = useState("");
   const [note, setNote] = useState("");
+
+  function buildAllocations() {
+    if (!receiptId || !statementId) return [];
+    let pendingAmount = roundMoney(Math.min(parseMoney(amount), remainingAmount));
+    if (pendingAmount <= 0) return [];
+
+    if (styleAccountId) {
+      const itemUnpaidAmount = selectedItemSummary?.unpaidAmount ?? 0;
+      const allocatedAmount = roundMoney(Math.min(pendingAmount, itemUnpaidAmount));
+      return allocatedAmount > 0
+        ? [
+            {
+              id: createId("alloc"),
+              receiptId,
+              customerId: props.customerId,
+              statementId,
+              styleAccountId,
+              allocatedAmount,
+              note: note.trim(),
+            },
+          ]
+        : [];
+    }
+
+    const allocations: ReceiptAllocation[] = [];
+    for (const item of statementSummary?.items ?? []) {
+      if (pendingAmount <= 0) break;
+      if (item.unpaidAmount <= 0) continue;
+      const allocatedAmount = roundMoney(Math.min(pendingAmount, item.unpaidAmount));
+      allocations.push({
+        id: createId("alloc"),
+        receiptId,
+        customerId: props.customerId,
+        statementId,
+        styleAccountId: item.item.styleAccountId,
+        allocatedAmount,
+        note: note.trim() || "自动分配到整张月度对账单",
+      });
+      pendingAmount = roundMoney(pendingAmount - allocatedAmount);
+    }
+    return allocations;
+  }
 
   return (
     <Modal onClose={props.onClose} title="收款分配">
@@ -3016,15 +3065,12 @@ function AllocationModal(props: {
         onSubmit={(event) => {
           event.preventDefault();
           if (!receiptId || !statementId) return;
-          props.onSubmit({
-            id: createId("alloc"),
-            receiptId,
-            customerId: props.customerId,
-            statementId,
-            styleAccountId: styleAccountId || undefined,
-            allocatedAmount: parseMoney(amount),
-            note: note.trim(),
-          });
+          const allocations = buildAllocations();
+          if (allocations.length === 0) {
+            window.alert("没有可分配金额，请检查收款未分配金额或款号未收金额。");
+            return;
+          }
+          props.onSubmit(allocations);
         }}
       >
         <Field label="客户收款" required>
@@ -3054,9 +3100,9 @@ function AllocationModal(props: {
             ))}
           </select>
         </Field>
-        <Field label="是否分配到具体款号">
+        <Field label="分配方式">
           <select onChange={(event) => setStyleAccountId(event.target.value)} value={styleAccountId}>
-            <option value="">只分配到整张月度对账单</option>
+            <option value="">自动分配到整张月度对账单</option>
             {statementSummary?.items.map((item) => (
               <option key={item.item.id} value={item.item.styleAccountId}>
                 {item.styleAccount?.styleNo} / 未收 ¥ {formatMoney(item.unpaidAmount)}
@@ -3065,14 +3111,24 @@ function AllocationModal(props: {
           </select>
         </Field>
         <Field label="分配金额">
-          <input
-            min="0"
-            onChange={(event) => setAmount(event.target.value)}
-            placeholder={`最多未分配 ¥ ${formatMoney(remainingAmount)}`}
-            step="0.01"
-            type="number"
-            value={amount}
-          />
+          <>
+            <div className="allocation-amount-row">
+              <input
+                min="0"
+                onChange={(event) => setAmount(event.target.value)}
+                placeholder={`最多可分配 ¥ ${formatMoney(maxAssignableAmount)}`}
+                step="0.01"
+                type="number"
+                value={amount}
+              />
+              <button className="recon-button recon-button-light" onClick={() => setAmount(maxAssignableAmount.toFixed(2))} type="button">
+                一键最大
+              </button>
+            </div>
+            <small>
+              收款未分配 ¥ {formatMoney(remainingAmount)} / 本月款号未收 ¥ {formatMoney(statementUnpaidTotal)}
+            </small>
+          </>
         </Field>
         <Field label="备注">
           <textarea onChange={(event) => setNote(event.target.value)} placeholder="例如：7月到账，归属6月尾款" value={note} />

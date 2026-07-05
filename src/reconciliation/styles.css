@@ -346,6 +346,19 @@
   font-style: normal;
 }
 
+.recon-field small {
+  color: #6f7f93;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.allocation-amount-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
 .recon-stat-grid {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
