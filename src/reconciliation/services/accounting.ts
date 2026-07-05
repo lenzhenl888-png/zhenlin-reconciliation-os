@@ -78,6 +78,8 @@ export function getCustomerDisplayName(customerId: string, store: Reconciliation
 }
 
 export function summarizeStatement(statement: MonthlyStatement, store: ReconciliationStore): MonthlyStatementSummary {
+  const openingBalance = roundMoney(statement.openingBalance);
+  const realtimeOpeningBalance = getRealtimeOpeningBalance(statement, store);
   const items = store.statementItems
     .filter((item) => item.statementId === statement.id)
     .map((item) => summarizeStatementItem(item, statement, store));
@@ -98,12 +100,14 @@ export function summarizeStatement(statement: MonthlyStatement, store: Reconcili
       .map((allocation) => allocation.allocatedAmount),
   );
   const currentInvoiced = sumMoney(items.map((item) => item.invoicedAmount));
-  const closingBalance = roundMoney(statement.openingBalance + currentReceivable - currentReceived);
-  const grandTotal = roundMoney(statement.openingBalance + currentReceivable);
+  const closingBalance = roundMoney(openingBalance + currentReceivable - currentReceived);
+  const grandTotal = roundMoney(openingBalance + currentReceivable);
 
   return {
     statement,
-    openingBalance: roundMoney(statement.openingBalance),
+    openingBalance,
+    realtimeOpeningBalance,
+    openingBalanceDifference: roundMoney(realtimeOpeningBalance - openingBalance),
     styleReceivableTotal,
     increaseAdjustmentTotal,
     decreaseAdjustmentTotal,
@@ -204,6 +208,14 @@ export function getDefaultOpeningBalance(customerId: string, periodMonth: string
     .sort((left, right) => right.periodMonth.localeCompare(left.periodMonth));
   const previousStatement = previousStatements[0];
   return previousStatement ? summarizeStatement(previousStatement, store).closingBalance : 0;
+}
+
+export function getRealtimeOpeningBalance(statement: MonthlyStatement, store: ReconciliationStore) {
+  const previousStatements = store.monthlyStatements
+    .filter((item) => item.customerId === statement.customerId && item.periodMonth < statement.periodMonth)
+    .sort((left, right) => right.periodMonth.localeCompare(left.periodMonth));
+  const previousStatement = previousStatements[0];
+  return previousStatement ? summarizeStatement(previousStatement, store).closingBalance : roundMoney(statement.openingBalance);
 }
 
 export function getReceiptAllocatedAmount(receiptId: string, allocations: ReceiptAllocation[]) {

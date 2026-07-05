@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ChangeEvent, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import {
   Banknote,
   BarChart3,
@@ -92,6 +92,8 @@ type Filters = {
   status: AccountStatus | "";
 };
 
+type CloudStatus = "loading" | "ready" | "saving" | "error";
+
 const navItems: Array<{ id: ActiveModule; label: string; icon: typeof Users }> = [
   { id: "customer", label: "客户对账", icon: Users },
   { id: "customerProfiles", label: "客户资料", icon: UserPlus },
@@ -119,11 +121,80 @@ export function ReconciliationApp() {
   const [filters, setFilters] = useState<Filters>(emptyFilters);
   const [draftFilters, setDraftFilters] = useState<Filters>(emptyFilters);
   const [modal, setModal] = useState<ModalState>(null);
+  const [cloudStatus, setCloudStatus] = useState<CloudStatus>("loading");
+  const [cloudNotice, setCloudNotice] = useState("正在同步云端数据...");
+  const cloudReadyRef = useRef(false);
+  const latestSaveIdRef = useRef(0);
   const usesEmptyInitialData = reconciliationRepository.usesEmptyInitialData();
 
   useEffect(() => {
     reconciliationRepository.save(store);
-  }, [store]);
+    if (auth.status !== "authenticated" || !auth.token || !cloudReadyRef.current) return;
+    const saveId = latestSaveIdRef.current + 1;
+    latestSaveIdRef.current = saveId;
+    setCloudStatus("saving");
+    const timer = window.setTimeout(() => {
+      void reconciliationRepository
+        .saveCloud(auth.token, store)
+        .then(() => {
+          if (latestSaveIdRef.current !== saveId) return;
+          setCloudStatus("ready");
+          setCloudNotice("云端数据已保存");
+        })
+        .catch((error) => {
+          if (latestSaveIdRef.current !== saveId) return;
+          setCloudStatus("error");
+          setCloudNotice(error instanceof Error ? error.message : "云端保存失败，本地数据已临时保留");
+          if (error instanceof Error && error.name === "SESSION_REPLACED") void auth.checkSession();
+        });
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [auth.checkSession, auth.status, auth.token, store]);
+
+  useEffect(() => {
+    if (auth.status !== "authenticated" || !auth.token) return;
+    let canceled = false;
+    cloudReadyRef.current = false;
+    setCloudStatus("loading");
+    setCloudNotice("正在同步云端数据...");
+
+    async function loadCloudStore() {
+      try {
+        const localStore = reconciliationRepository.load();
+        const cloudStore = await reconciliationRepository.loadCloud(auth.token);
+        const localHasData = reconciliationRepository.hasBusinessData(localStore);
+        const cloudHasData = reconciliationRepository.hasBusinessData(cloudStore);
+        const localDiffersFromCloud = JSON.stringify(localStore) !== JSON.stringify(cloudStore);
+        const migrationMessage = cloudHasData
+          ? "发现本机还有未迁移的本地对账数据，是否合并上传到云端？同 id 数据会更新，不会重复添加。"
+          : "发现本机有本地对账数据，是否上传到云端？确认后这份数据会成为云端业务数据。";
+        const shouldMigrateLocal =
+          localHasData && localDiffersFromCloud && window.confirm(migrationMessage);
+        const nextStore = shouldMigrateLocal
+          ? await reconciliationRepository.mergeLocalToCloud(auth.token, localStore)
+          : cloudStore;
+        if (canceled) return;
+        setStore(nextStore);
+        setSelectedCustomerId(nextStore.customers[0]?.id ?? "");
+        setSelectedPeriod(getAvailablePeriods(nextStore)[0] ?? getCurrentPeriod());
+        setSelectedItemId("");
+        cloudReadyRef.current = true;
+        setCloudStatus("ready");
+        setCloudNotice(shouldMigrateLocal ? "本地数据已合并上传到云端" : "已连接云端数据");
+      } catch (error) {
+        if (canceled) return;
+        cloudReadyRef.current = false;
+        setCloudStatus("error");
+        setCloudNotice(error instanceof Error ? error.message : "云端数据同步失败，当前仍在使用本地数据");
+        if (error instanceof Error && error.name === "SESSION_REPLACED") void auth.checkSession();
+      }
+    }
+
+    void loadCloudStore();
+    return () => {
+      canceled = true;
+    };
+  }, [auth.status, auth.token]);
 
   const customerProfiles = store.customerProfiles ?? [];
   const activeCustomerIds = new Set(customerProfiles.filter((profile) => profile.status === "正常").map((profile) => profile.id));
@@ -876,7 +947,7 @@ export function ReconciliationApp() {
 
   function resetDemoData() {
     const confirmMessage = usesEmptyInitialData
-      ? "确认清空当前本地对账数据吗？此操作会清空当前浏览器里的客户、对账、收款和开票数据。"
+      ? "确认清空当前对账数据吗？登录状态下此操作会同步清空云端客户、对账、收款和开票数据。"
       : "确认恢复为系统示例数据吗？当前本地数据会被覆盖。";
     if (!window.confirm(confirmMessage)) return;
     const initialStore = reconciliationRepository.reset();
@@ -944,6 +1015,7 @@ export function ReconciliationApp() {
             当前账号仍在使用初始化密码，请尽快通过“系统设置”中的修改密码入口更换密码。
           </div>
         )}
+        <div className={`recon-cloud-notice is-${cloudStatus}`}>{cloudNotice}</div>
 
         {activeModule === "customer" && (
           <CustomerStatementPanel
@@ -1158,6 +1230,9 @@ function CustomerStatementPanel(props: {
   statement?: MonthlyStatement;
   summary: ReturnType<typeof summarizeAll>;
 }) {
+  const openingBalanceDifference = props.selectedStatementSummary?.openingBalanceDifference ?? 0;
+  const hasOpeningBalanceDifference = Math.abs(openingBalanceDifference) >= 0.01;
+
   return (
     <div className="recon-workspace">
       <section className="recon-filterbar recon-filterbar-monthly" aria-label="筛选区">
@@ -1215,8 +1290,9 @@ function CustomerStatementPanel(props: {
         </button>
       </section>
 
-      <section className="recon-stat-grid recon-stat-grid-six" aria-label="月度统计卡片">
-        <StatCard label="期初余额" value={props.selectedStatementSummary?.openingBalance ?? 0} icon={Banknote} />
+      <section className="recon-stat-grid recon-stat-grid-seven" aria-label="月度统计卡片">
+        <StatCard label="账单期初余额" value={props.selectedStatementSummary?.openingBalance ?? 0} icon={Banknote} />
+        <StatCard label="实时期初余额" value={props.selectedStatementSummary?.realtimeOpeningBalance ?? 0} icon={RotateCcw} />
         <StatCard label="本月款号应收" value={props.selectedStatementSummary?.styleReceivableTotal ?? 0} icon={BarChart3} />
         <StatCard label="本月调增" value={props.selectedStatementSummary?.increaseAdjustmentTotal ?? 0} icon={Plus} />
         <StatCard label="本月扣款 / 调减" value={props.selectedStatementSummary?.decreaseAdjustmentTotal ?? 0} icon={ReceiptText} />
@@ -1267,13 +1343,13 @@ function CustomerStatementPanel(props: {
                   </label>
                   {props.selectedStatementSummary?.status === "已结清" && <em>系统判断：已结清</em>}
                   {props.statement.note && <small>{props.statement.note}</small>}
+                  {hasOpeningBalanceDifference && (
+                    <small className="realtime-opening-note">
+                      上月余额已变化，实时期初余额 ¥ {formatMoney(props.selectedStatementSummary?.realtimeOpeningBalance ?? 0)}
+                    </small>
+                  )}
                 </div>
               )}
-            </div>
-            <div className="recon-summary-metrics">
-              <MiniMetric label="期初余额" value={props.selectedStatementSummary?.openingBalance ?? 0} />
-              <MiniMetric label="调整后应收" value={props.selectedStatementSummary?.adjustedReceivable ?? 0} />
-              <MiniMetric label="总合计" value={props.selectedStatementSummary?.grandTotal ?? 0} important />
             </div>
             <div className="recon-topbar-actions recon-statement-actions">
               <button className="recon-button recon-button-light" onClick={props.onOpenReceiptPool} type="button">
@@ -3231,15 +3307,6 @@ function StatCard(props: { icon: typeof Banknote; label: string; tone?: "warning
       </div>
       <Icon size={22} />
     </article>
-  );
-}
-
-function MiniMetric(props: { important?: boolean; label: string; value: number }) {
-  return (
-    <div className={props.important ? "is-important" : ""}>
-      <span>{props.label}</span>
-      <strong>¥ {formatMoney(props.value)}</strong>
-    </div>
   );
 }
 

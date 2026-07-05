@@ -13,6 +13,12 @@ import {
   writeDb,
   hashPassword,
 } from "./authStore.js";
+import {
+  hasReconciliationData,
+  mergeReconciliationStore,
+  readReconciliationStore,
+  writeReconciliationStore,
+} from "./reconciliationStore.js";
 import { createToken, getTokenSecret, verifyToken } from "./token.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -59,7 +65,7 @@ function parseBody(req) {
     let body = "";
     req.on("data", (chunk) => {
       body += chunk;
-      if (body.length > 1024 * 1024) reject(new Error("BODY_TOO_LARGE"));
+      if (body.length > 20 * 1024 * 1024) reject(new Error("BODY_TOO_LARGE"));
     });
     req.on("end", () => {
       if (!body) return resolve({});
@@ -161,6 +167,32 @@ async function handleApi(req, res, pathname) {
     result.user.updatedAt = new Date().toISOString();
     writeDb(result.db);
     sendJson(res, 200, { user: publicUser(result.user) });
+    return;
+  }
+
+  if (pathname === "/api/reconciliation/store" && req.method === "GET") {
+    const result = authenticate(req);
+    if (result.error) return sendError(res, 401, result.error[0], result.error[1]);
+    const store = readReconciliationStore();
+    sendJson(res, 200, { store, hasData: hasReconciliationData(store) });
+    return;
+  }
+
+  if (pathname === "/api/reconciliation/store" && req.method === "PUT") {
+    const result = authenticate(req);
+    if (result.error) return sendError(res, 401, result.error[0], result.error[1]);
+    const { store } = await parseBody(req);
+    const savedStore = writeReconciliationStore(store);
+    sendJson(res, 200, { store: savedStore, hasData: hasReconciliationData(savedStore) });
+    return;
+  }
+
+  if (pathname === "/api/reconciliation/import" && req.method === "POST") {
+    const result = authenticate(req);
+    if (result.error) return sendError(res, 401, result.error[0], result.error[1]);
+    const { store } = await parseBody(req);
+    const mergedStore = mergeReconciliationStore(store);
+    sendJson(res, 200, { store: mergedStore, hasData: hasReconciliationData(mergedStore) });
     return;
   }
 

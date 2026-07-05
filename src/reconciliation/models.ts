@@ -187,6 +187,8 @@ export type StatementItemSummary = {
 export type MonthlyStatementSummary = {
   statement: MonthlyStatement;
   openingBalance: number;
+  realtimeOpeningBalance: number;
+  openingBalanceDifference: number;
   styleReceivableTotal: number;
   increaseAdjustmentTotal: number;
   decreaseAdjustmentTotal: number;

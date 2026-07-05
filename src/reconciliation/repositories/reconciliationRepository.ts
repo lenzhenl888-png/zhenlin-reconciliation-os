@@ -20,8 +20,12 @@ const USE_EMPTY_INITIAL_DATA = env.VITE_EMPTY_INITIAL_RECONCILIATION === "true";
 const DATA_RESET_VERSION = env.VITE_RECONCILIATION_DATA_RESET_VERSION ?? "";
 
 export type ReconciliationRepository = {
+  hasBusinessData(store: ReconciliationStore): boolean;
   load(): ReconciliationStore;
+  loadCloud(token: string): Promise<ReconciliationStore>;
+  mergeLocalToCloud(token: string, store: ReconciliationStore): Promise<ReconciliationStore>;
   save(store: ReconciliationStore): void;
+  saveCloud(token: string, store: ReconciliationStore): Promise<void>;
   reset(): ReconciliationStore;
   usesEmptyInitialData(): boolean;
 };
@@ -55,6 +59,19 @@ function markStoredDataResetForBuild() {
   if (USE_EMPTY_INITIAL_DATA && DATA_RESET_VERSION !== "") {
     window.localStorage.setItem(RESET_VERSION_STORAGE_KEY, DATA_RESET_VERSION);
   }
+}
+
+function hasBusinessData(store: ReconciliationStore) {
+  return (
+    store.customers.length > 0 ||
+    store.customerProfiles.length > 0 ||
+    store.styleAccounts.length > 0 ||
+    store.monthlyStatements.length > 0 ||
+    store.statementItems.length > 0 ||
+    store.statementAdjustments.length > 0 ||
+    store.customerReceipts.length > 0 ||
+    store.receiptAllocations.length > 0
+  );
 }
 
 function isFullStore(store: Partial<ReconciliationStore>): store is ReconciliationStore {
@@ -224,15 +241,9 @@ function normalizeStore(store: ReconciliationStore): ReconciliationStore {
 }
 
 export const reconciliationRepository: ReconciliationRepository = {
+  hasBusinessData,
   load() {
     try {
-      if (shouldResetStoredDataForBuild()) {
-        const initialStore = createInitialStore();
-        this.save(initialStore);
-        markStoredDataResetForBuild();
-        return initialStore;
-      }
-
       const rawStore = window.localStorage.getItem(STORAGE_KEY);
       if (rawStore) {
         const parsedStore = JSON.parse(rawStore) as Partial<ReconciliationStore>;
@@ -250,6 +261,13 @@ export const reconciliationRepository: ReconciliationRepository = {
         return migratedStore;
       }
 
+      if (shouldResetStoredDataForBuild()) {
+        const initialStore = createInitialStore();
+        this.save(initialStore);
+        markStoredDataResetForBuild();
+        return initialStore;
+      }
+
       const initialStore = createInitialStore();
       this.save(initialStore);
       return initialStore;
@@ -262,6 +280,42 @@ export const reconciliationRepository: ReconciliationRepository = {
   save(store) {
     window.localStorage.setItem(STORAGE_KEY, JSON.stringify(store));
   },
+  async loadCloud(token) {
+    const response = await fetch("/api/reconciliation/store", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    if (!response.ok) throw await createApiError(response);
+    const body = (await response.json()) as { store: ReconciliationStore };
+    const normalizedStore = normalizeStore(body.store);
+    this.save(normalizedStore);
+    return normalizedStore;
+  },
+  async saveCloud(token, store) {
+    const response = await fetch("/api/reconciliation/store", {
+      body: JSON.stringify({ store }),
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      method: "PUT",
+    });
+    if (!response.ok) throw await createApiError(response);
+  },
+  async mergeLocalToCloud(token, store) {
+    const response = await fetch("/api/reconciliation/import", {
+      body: JSON.stringify({ store }),
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      method: "POST",
+    });
+    if (!response.ok) throw await createApiError(response);
+    const body = (await response.json()) as { store: ReconciliationStore };
+    const normalizedStore = normalizeStore(body.store);
+    this.save(normalizedStore);
+    return normalizedStore;
+  },
   reset() {
     const initialStore = createInitialStore();
     this.save(initialStore);
@@ -272,3 +326,14 @@ export const reconciliationRepository: ReconciliationRepository = {
     return USE_EMPTY_INITIAL_DATA;
   },
 };
+
+async function createApiError(response: Response) {
+  try {
+    const body = await response.json();
+    const error = new Error(body?.error?.message || "云端数据请求失败");
+    error.name = body?.error?.code || "API_ERROR";
+    return error;
+  } catch {
+    return new Error("云端数据请求失败");
+  }
+}
