@@ -170,7 +170,7 @@ export function ReconciliationApp() {
       try {
         const localStore = reconciliationRepository.load();
         const cloudStore = await reconciliationRepository.loadCloud(auth.token);
-        const localHasData = reconciliationRepository.hasBusinessData(localStore);
+        const localHasData = false;
         const cloudHasData = reconciliationRepository.hasBusinessData(cloudStore);
         const localDiffersFromCloud = JSON.stringify(localStore) !== JSON.stringify(cloudStore);
         const migrationMessage = cloudHasData
@@ -1230,6 +1230,20 @@ function CustomerStatementPanel(props: {
 }) {
   const openingBalanceDifference = props.selectedStatementSummary?.openingBalanceDifference ?? 0;
   const hasOpeningBalanceDifference = Math.abs(openingBalanceDifference) >= 0.01;
+  const [customerSearchText, setCustomerSearchText] = useState("");
+  const customerButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
+  const matchedCustomerId = useMemo(() => {
+    const keyword = customerSearchText.trim().toLowerCase();
+    if (!keyword) return "";
+    return (
+      props.customerSummaries.find((summary) => summary.customerName.toLowerCase().includes(keyword))?.customerId ?? ""
+    );
+  }, [customerSearchText, props.customerSummaries]);
+
+  useEffect(() => {
+    if (!matchedCustomerId) return;
+    customerButtonRefs.current[matchedCustomerId]?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }, [matchedCustomerId]);
 
   return (
     <div className="recon-workspace">
@@ -1297,9 +1311,9 @@ function CustomerStatementPanel(props: {
           value={roundMoney((props.selectedStatementSummary?.increaseAdjustmentTotal ?? 0) - (props.selectedStatementSummary?.decreaseAdjustmentTotal ?? 0))}
           icon={ReceiptText}
         />
-        <StatCard label="本月调整后应收" value={props.selectedStatementSummary?.adjustedReceivable ?? 0} icon={CreditCard} />
-        <StatCard label="本月已收款" value={props.selectedStatementSummary?.currentReceived ?? 0} icon={CreditCard} />
-        <StatCard label="总合计" value={props.selectedStatementSummary?.grandTotal ?? 0} icon={Banknote} tone="warning" />
+        <StatCard label="本月调整后应收" value={props.selectedStatementSummary?.adjustedReceivable ?? 0} icon={CreditCard} tone="warning" />
+        <StatCard label="本月已收款" value={props.selectedStatementSummary?.currentReceived ?? 0} icon={CreditCard} tone="warning" />
+        <StatCard label="期末未收" value={props.selectedStatementSummary?.closingBalance ?? 0} icon={Banknote} tone="warning" />
       </section>
 
       <section className="recon-ledger">
@@ -1310,12 +1324,28 @@ function CustomerStatementPanel(props: {
               <strong>{props.customerSummaries.length} 个客户</strong>
             </div>
           </div>
+          <label className="recon-customer-search">
+            <Search size={15} />
+            <input
+              onChange={(event) => setCustomerSearchText(event.target.value)}
+              placeholder="查找客户"
+              value={customerSearchText}
+            />
+          </label>
           <div className="recon-customer-list">
             {props.customerSummaries.map((summary) => (
               <button
-                className={summary.customerId === props.selectedCustomerId ? "is-selected" : ""}
+                className={[
+                  summary.customerId === props.selectedCustomerId ? "is-selected" : "",
+                  summary.customerId === matchedCustomerId ? "is-search-match" : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
                 key={summary.customerId}
                 onClick={() => props.onSelectCustomer(summary.customerId)}
+                ref={(element) => {
+                  customerButtonRefs.current[summary.customerId] = element;
+                }}
                 type="button"
               >
                 <strong>{summary.customerName}</strong>

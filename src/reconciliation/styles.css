@@ -452,6 +452,29 @@
   font-size: 15px;
 }
 
+.recon-customer-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 10px 0;
+  padding: 0 10px;
+  min-height: 36px;
+  border: 1px solid #cfd7e3;
+  border-radius: 6px;
+  background: #fbfcfe;
+  color: #6f7f93;
+}
+
+.recon-customer-search input {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: #172033;
+  font-size: 13px;
+  font-weight: 800;
+  outline: none;
+}
+
 .recon-customer-list {
   display: grid;
   gap: 8px;
@@ -477,6 +500,11 @@
 .recon-customer-list button.is-selected {
   border-color: #1e5b78;
   background: #eef8fb;
+}
+
+.recon-customer-list button.is-search-match {
+  border-color: #b54708;
+  box-shadow: 0 0 0 2px rgba(181, 71, 8, 0.12);
 }
 
 .recon-customer-list strong {
