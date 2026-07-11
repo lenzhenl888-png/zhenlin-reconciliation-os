@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { ArrowRight, LockKeyhole, UserRound } from "lucide-react";
+import { Orb } from "../components/common/Orb";
 import { useAuth } from "./AuthContext";
 import "./auth.css";
 
@@ -20,12 +21,14 @@ export function LoginPage() {
 
   return (
     <main className="login-page">
-      <div aria-hidden="true" className="login-orb">
-        <div className="orb-halo" />
-        <div className="orb-ring" />
-        <div className="orb-core" />
-        <div className="orb-highlight" />
-      </div>
+      <Orb
+        accentColor="#8df5c4"
+        backgroundColor="#020711"
+        baseColor="#3b82f6"
+        className="login-orb"
+        glowColor="#6ee7f5"
+        speed={0.32}
+      />
       <form
         className="login-card login-shell"
         onSubmit={async (event) => {
