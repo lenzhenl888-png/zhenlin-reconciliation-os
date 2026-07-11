@@ -180,6 +180,8 @@ export type StatementItemSummary = {
   receivableAmount: number;
   invoicedAmount: number;
   paidAmount: number;
+  adjustmentNetAmount: number;
+  adjustedReceivableAmount: number;
   unpaidAmount: number;
   statusLabels: AccountStatus[];
 };

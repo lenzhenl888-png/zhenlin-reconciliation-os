@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
-import { LockKeyhole } from "lucide-react";
+import { ArrowRight, LockKeyhole, UserRound } from "lucide-react";
 import { useAuth } from "./AuthContext";
 import "./auth.css";
 
@@ -20,8 +20,14 @@ export function LoginPage() {
 
   return (
     <main className="login-page">
+      <div aria-hidden="true" className="login-orb">
+        <div className="orb-halo" />
+        <div className="orb-ring" />
+        <div className="orb-core" />
+        <div className="orb-highlight" />
+      </div>
       <form
-        className="login-card"
+        className="login-card login-shell"
         onSubmit={async (event) => {
           event.preventDefault();
           setError("");
@@ -36,11 +42,13 @@ export function LoginPage() {
           }
         }}
       >
-        <div className="login-mark">
-          <LockKeyhole size={28} />
+        <div className="login-brand">
+          <img alt="" className="login-brand-logo" src="/zhenlin-logo-white.png" />
         </div>
-        <h1>臻林客户对账系统</h1>
-        <p>请输入账号密码进入客户对账后台</p>
+        <div className="login-form-head">
+          <span>系统登录</span>
+          <strong>臻林客户对账OS</strong>
+        </div>
 
         {auth.notice && (
           <div className="login-notice" role="alert">
@@ -52,22 +60,29 @@ export function LoginPage() {
         )}
         {error && <div className="login-error">{error}</div>}
 
-        <label>
-          账号
-          <input autoComplete="username" onChange={(event) => setUsername(event.target.value)} placeholder="请输入账号" value={username} />
+        <label className="login-field">
+          <span>账号</span>
+          <div>
+            <UserRound size={18} />
+            <input autoComplete="username" onChange={(event) => setUsername(event.target.value)} placeholder="请输入账号" value={username} />
+          </div>
         </label>
-        <label>
-          密码
-          <input
-            autoComplete="current-password"
-            onChange={(event) => setPassword(event.target.value)}
-            placeholder="请输入密码"
-            type="password"
-            value={password}
-          />
+        <label className="login-field">
+          <span>密码</span>
+          <div>
+            <LockKeyhole size={18} />
+            <input
+              autoComplete="current-password"
+              onChange={(event) => setPassword(event.target.value)}
+              placeholder="请输入密码"
+              type="password"
+              value={password}
+            />
+          </div>
         </label>
-        <button disabled={submitting || !username.trim() || !password} type="submit">
+        <button className="login-submit" disabled={submitting || !username.trim() || !password} type="submit">
           {submitting ? "登录中..." : "登录"}
+          <ArrowRight size={18} />
         </button>
       </form>
     </main>

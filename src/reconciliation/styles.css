@@ -12,9 +12,34 @@
   top: 0;
   height: 100vh;
   flex-direction: column;
+  overflow: hidden;
   padding: 18px 14px;
   background: #101c2d;
   color: #d9e5f5;
+}
+
+.recon-sidebar-particles {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.particles-container,
+.particles-container canvas {
+  width: 100%;
+  height: 100%;
+}
+
+.particles-container canvas {
+  display: block;
+}
+
+.recon-sidebar .recon-brand,
+.recon-sidebar .recon-nav,
+.recon-sidebar .recon-sidebar-foot {
+  position: relative;
+  z-index: 1;
 }
 
 .recon-brand {
@@ -25,16 +50,11 @@
   border-bottom: 1px solid rgba(255, 255, 255, 0.08);
 }
 
-.recon-brand-mark {
-  display: grid;
-  width: 42px;
-  height: 42px;
-  place-items: center;
-  border-radius: 8px;
-  background: #1f7a8c;
-  color: #ffffff;
-  font-size: 15px;
-  font-weight: 800;
+.recon-brand-logo {
+  width: 46px;
+  height: 46px;
+  object-fit: contain;
+  filter: drop-shadow(0 0 10px rgba(185, 246, 255, 0.16));
 }
 
 .recon-brand strong,
@@ -338,6 +358,156 @@
 .recon-field textarea {
   min-height: 82px;
   resize: vertical;
+}
+
+.animated-select {
+  position: relative;
+  width: 100%;
+}
+
+.animated-select-trigger {
+  display: flex;
+  width: 100%;
+  min-height: 36px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid #cfd7e3;
+  border-radius: 6px;
+  padding: 7px 10px;
+  background: #fbfcfe;
+  color: #172033;
+  cursor: pointer;
+  font-weight: 800;
+  outline: none;
+  text-align: left;
+}
+
+.animated-select-trigger:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.animated-select-trigger span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.animated-select-trigger svg {
+  flex: 0 0 auto;
+  color: #172033;
+  transition: transform 0.18s ease;
+}
+
+.animated-select.is-open .animated-select-trigger svg {
+  transform: rotate(180deg);
+}
+
+.animated-select-trigger:focus-visible,
+.animated-select.is-open .animated-select-trigger {
+  border-color: #3b82f6;
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.16);
+}
+
+.animated-select-popover {
+  position: absolute;
+  z-index: 80;
+  top: calc(100% + 8px);
+  right: 0;
+  left: 0;
+  overflow: hidden;
+  border: 1px solid rgba(59, 130, 246, 0.22);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 18px 36px rgba(15, 23, 42, 0.14);
+}
+
+.animated-select-list {
+  max-height: 280px;
+  overflow-y: auto;
+  padding: 12px;
+}
+
+.animated-select-list::-webkit-scrollbar {
+  width: 8px;
+}
+
+.animated-select-list::-webkit-scrollbar-track {
+  background: #eef4fb;
+}
+
+.animated-select-list::-webkit-scrollbar-thumb {
+  border-radius: 4px;
+  background: #b9c8dc;
+}
+
+.animated-select-item {
+  display: block;
+  width: 100%;
+  min-height: 42px;
+  margin-bottom: 10px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  border-radius: 8px;
+  padding: 11px 12px;
+  background: #f6f8fc;
+  color: #172033;
+  cursor: pointer;
+  font-weight: 800;
+  outline: none;
+  text-align: left;
+  transform: scale(0.985);
+  transition:
+    background 0.16s ease,
+    border-color 0.16s ease,
+    box-shadow 0.16s ease,
+    transform 0.16s ease;
+}
+
+.animated-select-item:last-child {
+  margin-bottom: 0;
+}
+
+.animated-select-item span {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.animated-select-item.is-active,
+.animated-select-item:hover {
+  border-color: rgba(59, 130, 246, 0.36);
+  background: #eef6ff;
+  box-shadow: 0 8px 18px rgba(59, 130, 246, 0.1);
+  transform: scale(1);
+}
+
+.animated-select-item.is-selected {
+  border-color: rgba(37, 99, 235, 0.42);
+  background: linear-gradient(135deg, #dbeafe, #f0f9ff);
+  color: #0f172a;
+}
+
+.animated-select-gradient {
+  position: absolute;
+  right: 0;
+  left: 0;
+  pointer-events: none;
+  transition: opacity 0.24s ease;
+}
+
+.animated-select-gradient.top-gradient {
+  top: 0;
+  height: 42px;
+  background: linear-gradient(to bottom, #ffffff, rgba(255, 255, 255, 0));
+}
+
+.animated-select-gradient.bottom-gradient {
+  bottom: 0;
+  height: 72px;
+  background: linear-gradient(to top, #ffffff, rgba(255, 255, 255, 0));
 }
 
 .recon-field em {
@@ -895,6 +1065,34 @@
 
 .recon-simple-panel {
   overflow: hidden;
+}
+
+.records-fill-page {
+  display: flex;
+  min-height: calc(100vh - 136px);
+  flex-direction: column;
+  overflow: visible;
+}
+
+.overview-records-page {
+  min-height: calc(100vh - 264px);
+}
+
+.records-fill-page .module-filter-grid {
+  position: relative;
+  z-index: 2;
+}
+
+.records-fill-page .recon-table {
+  position: relative;
+  z-index: 1;
+}
+
+.records-fill-page::after {
+  display: block;
+  flex: 1 1 auto;
+  min-height: 240px;
+  content: "";
 }
 
 .recon-modal-backdrop {

@@ -100,8 +100,8 @@ export function summarizeStatement(statement: MonthlyStatement, store: Reconcili
       .map((allocation) => allocation.allocatedAmount),
   );
   const currentInvoiced = sumMoney(items.map((item) => item.invoicedAmount));
-  const closingBalance = roundMoney(openingBalance + currentReceivable - currentReceived);
-  const grandTotal = roundMoney(openingBalance + currentReceivable);
+  const closingBalance = roundMoney(realtimeOpeningBalance + currentReceivable - currentReceived);
+  const grandTotal = roundMoney(realtimeOpeningBalance + currentReceivable);
 
   return {
     statement,
@@ -146,9 +146,14 @@ export function summarizeStatementItem(
       .filter((allocation) => allocation.statementId === statement.id && allocation.styleAccountId === item.styleAccountId)
       .map((allocation) => allocation.allocatedAmount),
   );
-  const unpaidAmount = roundMoney(Math.max(item.receivableAmount - paidAmount, 0));
+  const relatedAdjustments = (store.statementAdjustments ?? []).filter(
+    (adjustment) => adjustment.statementId === statement.id && adjustment.relatedStyleAccountId === item.styleAccountId,
+  );
+  const adjustmentNetAmount = sumMoney(relatedAdjustments.map((adjustment) => getAdjustmentSignedAmount(adjustment)));
+  const adjustedReceivableAmount = roundMoney(item.receivableAmount + adjustmentNetAmount);
+  const unpaidAmount = roundMoney(Math.max(adjustedReceivableAmount - paidAmount, 0));
   const invoiceStatus = getInvoiceStatus(item.receivableAmount, invoicedAmount);
-  const paymentStatus = getPaymentStatus(item.receivableAmount, paidAmount);
+  const paymentStatus = getPaymentStatus(adjustedReceivableAmount, paidAmount);
 
   return {
     item,
@@ -156,6 +161,8 @@ export function summarizeStatementItem(
     receivableAmount: roundMoney(item.receivableAmount),
     invoicedAmount,
     paidAmount,
+    adjustmentNetAmount,
+    adjustedReceivableAmount,
     unpaidAmount,
     statusLabels: buildStatusLabels(invoiceStatus, paymentStatus),
   };

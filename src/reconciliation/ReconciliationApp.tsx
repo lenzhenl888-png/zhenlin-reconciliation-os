@@ -23,6 +23,9 @@ import {
 } from "lucide-react";
 import { createId } from "../utils/id";
 import { useAuth } from "../auth/AuthContext";
+import { AnimatedSelect } from "../components/common/AnimatedSelect";
+import { ClickSpark } from "../components/common/ClickSpark";
+import { Particles } from "../components/common/Particles";
 import type {
   AccountStatus,
   AdjustmentDirection,
@@ -96,10 +99,10 @@ type CloudStatus = "loading" | "ready" | "saving" | "error";
 
 const navItems: Array<{ id: ActiveModule; label: string; icon: typeof Users }> = [
   { id: "customer", label: "客户对账", icon: Users },
-  { id: "customerProfiles", label: "客户资料", icon: UserPlus },
   { id: "overview", label: "对账总览", icon: LayoutDashboard },
   { id: "payments", label: "收款记录", icon: CreditCard },
   { id: "invoices", label: "开票记录", icon: ReceiptText },
+  { id: "customerProfiles", label: "客户资料", icon: UserPlus },
   { id: "settings", label: "系统设置", icon: Settings },
 ];
 
@@ -108,6 +111,10 @@ const emptyFilters: Filters = {
   styleNo: "",
   status: "",
 };
+
+function toSelectOptions<TValue extends string>(options: readonly TValue[]) {
+  return options.map((option) => ({ label: option, value: option }));
+}
 
 export function ReconciliationApp() {
   const auth = useAuth();
@@ -245,7 +252,8 @@ export function ReconciliationApp() {
         const displayText = `${profile?.shortName ?? customer.name} ${profile?.fullName ?? ""}`.toLowerCase();
         return !customerName || displayText.includes(customerName);
       })
-      .map((customer) => summarizeCustomer(customer, store));
+      .map((customer) => summarizeCustomer(customer, store))
+      .sort((left, right) => right.closingBalanceTotal - left.closingBalanceTotal || left.customerName.localeCompare(right.customerName, "zh-Hans-CN"));
   }, [filters.customerName, store]);
   const allSummary = summarizeAll(store.customers, store);
 
@@ -797,7 +805,7 @@ export function ReconciliationApp() {
     if (!selectedCustomer || !selectedStatementSummary) return;
     const statement = selectedStatementSummary.statement;
     const statementDate = formatDate(new Date());
-    const openingBalance = selectedStatementSummary.openingBalance;
+    const openingBalance = selectedStatementSummary.realtimeOpeningBalance;
     const currentTotal = selectedStatementSummary.styleReceivableTotal;
     const adjustmentNetTotal = roundMoney(selectedStatementSummary.increaseAdjustmentTotal - selectedStatementSummary.decreaseAdjustmentTotal);
     const deductionTotal = roundMoney(-selectedStatementSummary.decreaseAdjustmentTotal);
@@ -959,13 +967,24 @@ export function ReconciliationApp() {
   }
 
   return (
-    <div className="recon-shell">
+    <ClickSpark duration={420} sparkColor="#1f7a8c" sparkCount={8} sparkRadius={18} sparkSize={11}>
+      <div className="recon-shell">
       <aside className="recon-sidebar">
+        <Particles
+          className="recon-sidebar-particles"
+          moveParticlesOnHover
+          particleBaseSize={82}
+          particleColors={["#6f92e0", "#8fb5ff", "#2fb7c8"]}
+          particleCount={360}
+          particleHoverFactor={2.6}
+          particleSpread={18}
+          pixelRatio={1}
+          speed={0.16}
+        />
         <div className="recon-brand">
-          <div className="recon-brand-mark">ZL</div>
+          <img alt="" className="recon-brand-logo" src="/zhenlin-logo-white.png" />
           <div>
             <strong>臻林客户对账系统</strong>
-            <span>Monthly Reconciliation</span>
           </div>
         </div>
 
@@ -1184,7 +1203,8 @@ export function ReconciliationApp() {
           statementSummary={selectedStatementSummary}
         />
       )}
-    </div>
+      </div>
+    </ClickSpark>
   );
 }
 
@@ -1258,13 +1278,12 @@ function CustomerStatementPanel(props: {
         </label>
         <label>
           对账月份
-          <select onChange={(event) => props.onPeriodChange(event.target.value)} value={props.selectedPeriod}>
-            {props.periods.map((period) => (
-              <option key={period} value={period}>
-                {period}
-              </option>
-            ))}
-          </select>
+          <AnimatedSelect
+            ariaLabel="对账月份"
+            onChange={props.onPeriodChange}
+            options={toSelectOptions(props.periods)}
+            value={props.selectedPeriod}
+          />
         </label>
         <label>
           款号
@@ -1276,17 +1295,12 @@ function CustomerStatementPanel(props: {
         </label>
         <label>
           对账状态
-          <select
-            onChange={(event) => props.onFiltersChange({ ...props.draftFilters, status: event.target.value as AccountStatus | "" })}
+          <AnimatedSelect
+            ariaLabel="对账状态"
+            onChange={(value) => props.onFiltersChange({ ...props.draftFilters, status: value as AccountStatus | "" })}
+            options={[{ label: "全部状态", value: "" }, ...toSelectOptions(accountStatusOptions)]}
             value={props.draftFilters.status}
-          >
-            <option value="">全部状态</option>
-            {accountStatusOptions.map((status) => (
-              <option key={status} value={status}>
-                {status}
-              </option>
-            ))}
-          </select>
+          />
         </label>
         <button className="recon-button recon-button-primary" onClick={props.onApplyFilters} type="button">
           <Search size={16} />
@@ -1365,13 +1379,12 @@ function CustomerStatementPanel(props: {
                 <div className="statement-status-control">
                   <label>
                     <span>账单状态</span>
-                    <select
-                      onChange={(event) => props.onStatementStatusChange(event.target.value as StatementStatus)}
+                    <AnimatedSelect
+                      ariaLabel="账单状态"
+                      onChange={(value) => props.onStatementStatusChange(value as StatementStatus)}
+                      options={toSelectOptions(["草稿", "已确认"])}
                       value={props.statement.status === "已结清" ? "已确认" : props.statement.status}
-                    >
-                      <option value="草稿">草稿</option>
-                      <option value="已确认">已确认</option>
-                    </select>
+                    />
                   </label>
                   {props.selectedStatementSummary?.status === "已结清" && <em>系统判断：已结清</em>}
                   {props.statement.note && <small>{props.statement.note}</small>}
@@ -1419,6 +1432,7 @@ function CustomerStatementPanel(props: {
                       <th>应收金额</th>
                       <th>已开票金额</th>
                       <th>已收款金额</th>
+                      <th>调整</th>
                       <th>未收金额</th>
                       <th>对账状态</th>
                       <th>操作</th>
@@ -1436,6 +1450,11 @@ function CustomerStatementPanel(props: {
                         <td>¥ {formatMoney(itemSummary.receivableAmount)}</td>
                         <td>¥ {formatMoney(itemSummary.invoicedAmount)}</td>
                         <td>¥ {formatMoney(itemSummary.paidAmount)}</td>
+                        <td className={itemSummary.adjustmentNetAmount < 0 ? "is-danger" : itemSummary.adjustmentNetAmount > 0 ? "is-ok" : ""}>
+                          {itemSummary.adjustmentNetAmount === 0
+                            ? "¥ 0.00"
+                            : `${itemSummary.adjustmentNetAmount > 0 ? "+" : "-"} ¥ ${formatMoney(Math.abs(itemSummary.adjustmentNetAmount))}`}
+                        </td>
                         <td className={itemSummary.unpaidAmount > 0 ? "is-danger" : "is-ok"}>¥ {formatMoney(itemSummary.unpaidAmount)}</td>
                         <td>
                           <StatusPills labels={itemSummary.statusLabels} />
@@ -1689,29 +1708,20 @@ function StatementAdjustmentTable(props: {
           {props.adjustments.map((adjustment) => (
             <tr key={adjustment.id}>
               <td>
-                <select
-                  onChange={(event) => updateAdjustment(adjustment, { direction: event.target.value as AdjustmentDirection })}
+                <AnimatedSelect
+                  ariaLabel="调整方向"
+                  onChange={(value) => updateAdjustment(adjustment, { direction: value as AdjustmentDirection })}
+                  options={adjustmentDirectionOptions.map((item) => ({ label: item.label, value: item.value }))}
                   value={adjustment.direction}
-                >
-                  {adjustmentDirectionOptions.map((item) => (
-                    <option key={item.value} value={item.value}>
-                      {item.label}
-                    </option>
-                  ))}
-                </select>
+                />
               </td>
               <td>
-                <select
-                  onChange={(event) => updateAdjustment(adjustment, { relatedStyleAccountId: event.target.value })}
+                <AnimatedSelect
+                  ariaLabel="关联款号"
+                  onChange={(value) => updateAdjustment(adjustment, { relatedStyleAccountId: value })}
+                  options={[{ label: "整月调整", value: "" }, ...styleOptions.map((style) => ({ label: style.styleNo, value: style.id }))]}
                   value={adjustment.relatedStyleAccountId ?? ""}
-                >
-                  <option value="">整月调整</option>
-                  {styleOptions.map((style) => (
-                    <option key={style.id} value={style.id}>
-                      {style.styleNo}
-                    </option>
-                  ))}
-                </select>
+                />
               </td>
               <td>
                 <input
@@ -1865,25 +1875,21 @@ function CustomerProfilesModule(props: {
         </label>
         <label>
           客户类型
-          <select onChange={(event) => setTypeFilter(event.target.value as CustomerType | "")} value={typeFilter}>
-            <option value="">全部类型</option>
-            {customerTypeOptions.map((item) => (
-              <option key={item} value={item}>
-                {item}
-              </option>
-            ))}
-          </select>
+          <AnimatedSelect
+            ariaLabel="客户类型"
+            onChange={(value) => setTypeFilter(value as CustomerType | "")}
+            options={[{ label: "全部类型", value: "" }, ...toSelectOptions(customerTypeOptions)]}
+            value={typeFilter}
+          />
         </label>
         <label>
           状态
-          <select onChange={(event) => setStatusFilter(event.target.value as CustomerProfileStatus | "")} value={statusFilter}>
-            <option value="">全部状态</option>
-            {customerProfileStatusOptions.map((item) => (
-              <option key={item} value={item}>
-                {item}
-              </option>
-            ))}
-          </select>
+          <AnimatedSelect
+            ariaLabel="客户资料状态"
+            onChange={(value) => setStatusFilter(value as CustomerProfileStatus | "")}
+            options={[{ label: "全部状态", value: "" }, ...toSelectOptions(customerProfileStatusOptions)]}
+            value={statusFilter}
+          />
         </label>
         <button className="recon-button recon-button-primary" onClick={startNewProfile} type="button">
           <UserPlus size={16} />
@@ -1992,13 +1998,15 @@ function CustomerProfilesModule(props: {
               <ProfileInput label="币种" onChange={(value) => updateProfile({ currency: value })} value={editingProfile.currency} />
               <label className="customer-profile-toggle">
                 <span>是否需要发票后付款</span>
-                <select
-                  onChange={(event) => updateProfile({ needInvoiceBeforePayment: event.target.value === "true" })}
+                <AnimatedSelect
+                  ariaLabel="是否需要发票后付款"
+                  onChange={(value) => updateProfile({ needInvoiceBeforePayment: value === "true" })}
+                  options={[
+                    { label: "否", value: "false" },
+                    { label: "是", value: "true" },
+                  ]}
                   value={String(editingProfile.needInvoiceBeforePayment)}
-                >
-                  <option value="false">否</option>
-                  <option value="true">是</option>
-                </select>
+                />
               </label>
             </ProfileSection>
 
@@ -2084,13 +2092,12 @@ function ProfileSelect<TValue extends string>(props: {
   return (
     <label className="customer-profile-field">
       <span>{props.label}</span>
-      <select onChange={(event) => props.onChange(event.target.value as TValue)} value={props.value}>
-        {props.options.map((option) => (
-          <option key={option} value={option}>
-            {option}
-          </option>
-        ))}
-      </select>
+      <AnimatedSelect
+        ariaLabel={props.label}
+        onChange={(value) => props.onChange(value as TValue)}
+        options={toSelectOptions(props.options)}
+        value={props.value}
+      />
     </label>
   );
 }
@@ -2123,7 +2130,7 @@ function OverviewModule(props: { customers: Customer[]; store: Parameters<typeof
         <StatCard label="已收款总额" value={filteredSummary.paidTotal} icon={CreditCard} />
         <StatCard label="未收余额" value={filteredSummary.unpaidAmount} icon={BarChart3} tone="warning" />
       </section>
-      <section className="recon-simple-panel">
+      <section className="recon-simple-panel records-fill-page overview-records-page">
         <div className="recon-panel-head">
           <div>
             <span>客户月度余额总览</span>
@@ -2133,36 +2140,30 @@ function OverviewModule(props: { customers: Customer[]; store: Parameters<typeof
         <div className="module-filter-grid">
           <label>
             客户
-            <select onChange={(event) => setCustomerId(event.target.value)} value={customerId}>
-              <option value="">全部客户</option>
-              {props.customers.map((customer) => (
-                <option key={customer.id} value={customer.id}>
-                  {customer.name}
-                </option>
-              ))}
-            </select>
+            <AnimatedSelect
+              ariaLabel="客户"
+              onChange={setCustomerId}
+              options={[{ label: "全部客户", value: "" }, ...props.customers.map((customer) => ({ label: customer.name, value: customer.id }))]}
+              value={customerId}
+            />
           </label>
           <label>
             对账月份
-            <select onChange={(event) => setPeriodMonth(event.target.value)} value={periodMonth}>
-              <option value="">全部月份</option>
-              {periodOptions.map((period) => (
-                <option key={period} value={period}>
-                  {period}
-                </option>
-              ))}
-            </select>
+            <AnimatedSelect
+              ariaLabel="对账月份"
+              onChange={setPeriodMonth}
+              options={[{ label: "全部月份", value: "" }, ...toSelectOptions(periodOptions)]}
+              value={periodMonth}
+            />
           </label>
           <label>
             状态
-            <select onChange={(event) => setStatus(event.target.value as StatementStatus | "")} value={status}>
-              <option value="">全部状态</option>
-              {statementStatusOptions.map((option) => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))}
-            </select>
+            <AnimatedSelect
+              ariaLabel="状态"
+              onChange={(value) => setStatus(value as StatementStatus | "")}
+              options={[{ label: "全部状态", value: "" }, ...toSelectOptions(statementStatusOptions)]}
+              value={status}
+            />
           </label>
           <button
             className="recon-button recon-button-light"
@@ -2261,7 +2262,7 @@ function ReceiptPoolModule(props: {
   }
 
   return (
-    <section className="recon-simple-panel">
+    <section className="recon-simple-panel records-fill-page receipt-records-page">
       <div className="recon-panel-head">
         <div>
           <span>全部收款记录</span>
@@ -2276,36 +2277,30 @@ function ReceiptPoolModule(props: {
       <div className="module-filter-grid">
         <label>
           客户
-          <select onChange={(event) => setSelectedCustomerId(event.target.value)} value={selectedCustomerId}>
-            <option value="">全部客户</option>
-            {props.customers.map((customer) => (
-              <option key={customer.id} value={customer.id}>
-                {customer.name}
-              </option>
-            ))}
-          </select>
+          <AnimatedSelect
+            ariaLabel="客户"
+            onChange={setSelectedCustomerId}
+            options={[{ label: "全部客户", value: "" }, ...props.customers.map((customer) => ({ label: customer.name, value: customer.id }))]}
+            value={selectedCustomerId}
+          />
         </label>
         <label>
           归属账期
-          <select onChange={(event) => setPeriodMonth(event.target.value)} value={periodMonth}>
-            <option value="">全部账期</option>
-            {receiptPeriodOptions.map((period) => (
-              <option key={period} value={period}>
-                {period}
-              </option>
-            ))}
-          </select>
+          <AnimatedSelect
+            ariaLabel="归属账期"
+            onChange={setPeriodMonth}
+            options={[{ label: "全部账期", value: "" }, ...toSelectOptions(receiptPeriodOptions)]}
+            value={periodMonth}
+          />
         </label>
         <label>
           收款方式
-          <select onChange={(event) => setMethod(event.target.value as PaymentMethod | "")} value={method}>
-            <option value="">全部方式</option>
-            {paymentMethods.map((option) => (
-              <option key={option} value={option}>
-                {option}
-              </option>
-            ))}
-          </select>
+          <AnimatedSelect
+            ariaLabel="收款方式"
+            onChange={(value) => setMethod(value as PaymentMethod | "")}
+            options={[{ label: "全部方式", value: "" }, ...toSelectOptions(paymentMethods)]}
+            value={method}
+          />
         </label>
         <label>
           流水号 / 备注
@@ -2474,7 +2469,7 @@ function InvoiceRecordsModule(props: { customers: Customer[]; styleAccounts: Sty
   const totalAmount = filteredRows.reduce((sum, row) => sum + row.record.amount, 0);
 
   return (
-    <section className="recon-simple-panel">
+    <section className="recon-simple-panel records-fill-page invoice-records-page">
       <div className="recon-panel-head">
         <div>
           <span>全部开票记录</span>
@@ -2484,25 +2479,21 @@ function InvoiceRecordsModule(props: { customers: Customer[]; styleAccounts: Sty
       <div className="module-filter-grid">
         <label>
           客户
-          <select onChange={(event) => setCustomerId(event.target.value)} value={customerId}>
-            <option value="">全部客户</option>
-            {props.customers.map((customer) => (
-              <option key={customer.id} value={customer.id}>
-                {customer.name}
-              </option>
-            ))}
-          </select>
+          <AnimatedSelect
+            ariaLabel="客户"
+            onChange={setCustomerId}
+            options={[{ label: "全部客户", value: "" }, ...props.customers.map((customer) => ({ label: customer.name, value: customer.id }))]}
+            value={customerId}
+          />
         </label>
         <label>
           开票月份
-          <select onChange={(event) => setPeriodMonth(event.target.value)} value={periodMonth}>
-            <option value="">全部月份</option>
-            {periodOptions.map((period) => (
-              <option key={period} value={period}>
-                {period}
-              </option>
-            ))}
-          </select>
+          <AnimatedSelect
+            ariaLabel="开票月份"
+            onChange={setPeriodMonth}
+            options={[{ label: "全部月份", value: "" }, ...toSelectOptions(periodOptions)]}
+            value={periodMonth}
+          />
         </label>
         <label>
           款号
@@ -2674,13 +2665,12 @@ function StatementModal(props: {
         }}
       >
         <Field label="客户" required>
-          <select onChange={(event) => updatePeriod(event.target.value, periodMonth)} value={customerId}>
-            {props.customers.map((customer) => (
-              <option key={customer.id} value={customer.id}>
-                {customer.name}
-              </option>
-            ))}
-          </select>
+          <AnimatedSelect
+            ariaLabel="客户"
+            onChange={(value) => updatePeriod(value, periodMonth)}
+            options={props.customers.map((customer) => ({ label: customer.name, value: customer.id }))}
+            value={customerId}
+          />
         </Field>
         <Field label="对账月份" required>
           <input onChange={(event) => updatePeriod(customerId, event.target.value)} type="month" value={periodMonth} />
@@ -2728,13 +2718,12 @@ function StatementItemModal(props: {
         }}
       >
         <Field label="归属月份 / 月度对账单" required>
-          <select onChange={(event) => setStatementId(event.target.value)} value={statementId}>
-            {props.statements.map((statement) => (
-              <option key={statement.id} value={statement.id}>
-                {statement.periodMonth} / {statement.status}
-              </option>
-            ))}
-          </select>
+          <AnimatedSelect
+            ariaLabel="归属月份 / 月度对账单"
+            onChange={setStatementId}
+            options={props.statements.map((statement) => ({ label: `${statement.periodMonth} / ${statement.status}`, value: statement.id }))}
+            value={statementId}
+          />
         </Field>
         <Field label="款号" required>
           <input disabled={!!props.item} onChange={(event) => setStyleNo(event.target.value)} placeholder="输入款号" value={styleNo} />
@@ -2947,13 +2936,12 @@ function ReceiptPoolModal(props: {
                       />
                     </td>
                     <td>
-                      <select onChange={(event) => updateRow(row.id, { method: event.target.value as PaymentMethod })} value={row.method}>
-                        {paymentMethods.map((method) => (
-                          <option key={method} value={method}>
-                            {method}
-                          </option>
-                        ))}
-                      </select>
+                      <AnimatedSelect
+                        ariaLabel="收款方式"
+                        onChange={(value) => updateRow(row.id, { method: value as PaymentMethod })}
+                        options={toSelectOptions(paymentMethods)}
+                        value={row.method}
+                      />
                     </td>
                     <td>
                       <input
@@ -2963,14 +2951,12 @@ function ReceiptPoolModal(props: {
                       />
                     </td>
                     <td>
-                      <select onChange={(event) => updateRow(row.id, { periodMonth: event.target.value })} value={row.periodMonth}>
-                        <option value="">未指定</option>
-                        {periodOptions.map((period) => (
-                          <option key={period} value={period}>
-                            {period}
-                          </option>
-                        ))}
-                      </select>
+                      <AnimatedSelect
+                        ariaLabel="归属账期"
+                        onChange={(value) => updateRow(row.id, { periodMonth: value })}
+                        options={[{ label: "未指定", value: "" }, ...toSelectOptions(periodOptions)]}
+                        value={row.periodMonth}
+                      />
                     </td>
                     <td>¥ {formatMoney(allocatedAmount)}</td>
                     <td className={amount - allocatedAmount > 0 ? "is-danger" : "is-ok"}>
@@ -3104,41 +3090,43 @@ function AllocationModal(props: {
         }}
       >
         <Field label="客户收款" required>
-          <select onChange={(event) => setReceiptId(event.target.value)} value={receiptId}>
-            {customerReceipts.map((receipt) => {
+          <AnimatedSelect
+            ariaLabel="客户收款"
+            onChange={setReceiptId}
+            options={customerReceipts.map((receipt) => {
               const allocated = getReceiptAllocatedAmount(receipt.id, props.receiptAllocations);
-              return (
-                <option key={receipt.id} value={receipt.id}>
-                  {receipt.receiptDate} / ¥ {formatMoney(receipt.amount)} / 未分配 ¥ {formatMoney(receipt.amount - allocated)}
-                </option>
-              );
+              return {
+                label: `${receipt.receiptDate} / ¥ ${formatMoney(receipt.amount)} / 未分配 ¥ ${formatMoney(receipt.amount - allocated)}`,
+                value: receipt.id,
+              };
             })}
-          </select>
+            value={receiptId}
+          />
         </Field>
         <Field label="分配到月度对账单" required>
-          <select
-            onChange={(event) => {
-              setStatementId(event.target.value);
+          <AnimatedSelect
+            ariaLabel="分配到月度对账单"
+            onChange={(value) => {
+              setStatementId(value);
               setStyleAccountId("");
             }}
+            options={customerStatements.map((statement) => ({ label: `${statement.periodMonth} / ${statement.status}`, value: statement.id }))}
             value={statementId}
-          >
-            {customerStatements.map((statement) => (
-              <option key={statement.id} value={statement.id}>
-                {statement.periodMonth} / {statement.status}
-              </option>
-            ))}
-          </select>
+          />
         </Field>
         <Field label="分配方式">
-          <select onChange={(event) => setStyleAccountId(event.target.value)} value={styleAccountId}>
-            <option value="">自动分配到整张月度对账单</option>
-            {statementSummary?.items.map((item) => (
-              <option key={item.item.id} value={item.item.styleAccountId}>
-                {item.styleAccount?.styleNo} / 未收 ¥ {formatMoney(item.unpaidAmount)}
-              </option>
-            ))}
-          </select>
+          <AnimatedSelect
+            ariaLabel="分配方式"
+            onChange={setStyleAccountId}
+            options={[
+              { label: "自动分配到整张月度对账单", value: "" },
+              ...(statementSummary?.items.map((item) => ({
+                label: `${item.styleAccount?.styleNo} / 未收 ¥ ${formatMoney(item.unpaidAmount)}`,
+                value: item.item.styleAccountId,
+              })) ?? []),
+            ]}
+            value={styleAccountId}
+          />
         </Field>
         <Field label="分配金额">
           <>
@@ -3176,7 +3164,7 @@ function StatementPreviewModal(props: {
 }) {
   const statement = props.statementSummary.statement;
   const statementDate = formatDate(new Date());
-  const openingBalance = props.statementSummary.openingBalance;
+  const openingBalance = props.statementSummary.realtimeOpeningBalance;
   const currentTotal = props.statementSummary.styleReceivableTotal;
   const adjustmentNetTotal = roundMoney(props.statementSummary.increaseAdjustmentTotal - props.statementSummary.decreaseAdjustmentTotal);
   const grandTotal = props.statementSummary.grandTotal;
