@@ -1,5 +1,6 @@
 import { createBrowserRouter } from "react-router-dom";
 import { LoginPage } from "../auth/LoginPage";
+import { BrandLogoPreviewPage } from "../brand-preview/BrandLogoPreviewPage";
 import { ProtectedRoute } from "../auth/ProtectedRoute";
 import { ReconciliationApp } from "../reconciliation/ReconciliationApp";
 import { WebsiteLayout } from "../website/layouts/WebsiteLayout";
@@ -15,6 +16,10 @@ export const router = createBrowserRouter([
   {
     path: "/login",
     element: <LoginPage />,
+  },
+  {
+    path: "/logo-preview",
+    element: <BrandLogoPreviewPage />,
   },
   {
     element: <ProtectedRoute />,

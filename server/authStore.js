@@ -10,6 +10,7 @@ function resolveDbPath() {
 
 const dbPath = resolveDbPath();
 const dataDir = path.dirname(dbPath);
+const defaultAdminUsername = "ZLFZ250721";
 
 function now() {
   return new Date().toISOString();
@@ -48,11 +49,21 @@ export function verifyPassword(password, passwordHash) {
 
 export function ensureDefaultAdmin() {
   const db = readDb();
-  if (db.users.length > 0) return;
+  if (db.users.length > 0) {
+    const hasNewAdmin = db.users.some((user) => user.username.toLowerCase() === defaultAdminUsername.toLowerCase());
+    const legacyAdmin = db.users.find((user) => user.username.toLowerCase() === "admin");
+    if (!hasNewAdmin && legacyAdmin) {
+      legacyAdmin.username = defaultAdminUsername;
+      legacyAdmin.updatedAt = now();
+      writeDb(db);
+      console.log(`[auth] Migrated admin username to ${defaultAdminUsername}`);
+    }
+    return;
+  }
   const timestamp = now();
   db.users.push({
     id: crypto.randomUUID(),
-    username: "admin",
+    username: defaultAdminUsername,
     passwordHash: hashPassword("Admin@123456"),
     displayName: "管理员",
     role: "admin",
@@ -64,7 +75,7 @@ export function ensureDefaultAdmin() {
     updatedAt: timestamp,
   });
   writeDb(db);
-  console.log("[auth] Created default admin: admin / Admin@123456");
+  console.log(`[auth] Created default admin: ${defaultAdminUsername} / Admin@123456`);
 }
 
 export function publicUser(user) {

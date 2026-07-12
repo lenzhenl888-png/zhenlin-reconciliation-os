@@ -40,6 +40,7 @@ export function Particles({
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const particlesRef = useRef<Particle[]>([]);
   const mouseRef = useRef({ active: false, x: 0, y: 0 });
+  const particleColorsKey = particleColors.join("|");
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -70,12 +71,23 @@ export function Particles({
     const resizeCanvas = () => {
       const rect = container.getBoundingClientRect();
       const ratio = Math.min(window.devicePixelRatio || 1, pixelRatio);
-      canvas.width = Math.max(1, Math.floor(rect.width * ratio));
-      canvas.height = Math.max(1, Math.floor(rect.height * ratio));
+      const nextWidth = Math.max(1, Math.floor(rect.width * ratio));
+      const nextHeight = Math.max(1, Math.floor(rect.height * ratio));
+      const shouldCreateParticles = canvas.width !== nextWidth || canvas.height !== nextHeight || particlesRef.current.length === 0;
+
+      if (canvas.width !== nextWidth) {
+        canvas.width = nextWidth;
+      }
+      if (canvas.height !== nextHeight) {
+        canvas.height = nextHeight;
+      }
       canvas.style.width = `${rect.width}px`;
       canvas.style.height = `${rect.height}px`;
       context.setTransform(ratio, 0, 0, ratio, 0, 0);
-      createParticles();
+
+      if (shouldCreateParticles) {
+        createParticles();
+      }
     };
 
     const handleMouseMove = (event: MouseEvent) => {
@@ -144,7 +156,7 @@ export function Particles({
     disableRotation,
     moveParticlesOnHover,
     particleBaseSize,
-    particleColors,
+    particleColorsKey,
     particleCount,
     particleHoverFactor,
     particleSpread,

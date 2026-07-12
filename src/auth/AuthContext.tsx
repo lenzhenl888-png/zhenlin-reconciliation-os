@@ -28,8 +28,23 @@ const userKey = "zhenlin.auth.user";
 const noticeKey = "zhenlin.auth.notice";
 const channelName = "zhenlin-auth-channel";
 const replacedMessage = "账号已在其他地方登录，本页面已下线。";
+const localDevToken = "zhenlin-local-dev-token";
+const localDevUser: AuthUser = {
+  id: "local-dev-user",
+  username: "local-dev",
+  displayName: "本地开发",
+  role: "admin",
+  status: "active",
+  lastLoginAt: "",
+  mustChangePassword: false,
+};
 
 const AuthContext = createContext<AuthContextValue | null>(null);
+
+function isLocalDevAuthEnabled() {
+  const env = (import.meta as ImportMeta & { env?: { DEV?: boolean } }).env;
+  return Boolean(env?.DEV) && ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
+}
 
 function readStoredUser() {
   const raw = localStorage.getItem(userKey);
@@ -51,9 +66,9 @@ async function readApiError(response: Response) {
 }
 
 export function AuthProvider(props: { children: ReactNode }) {
-  const [token, setToken] = useState(() => localStorage.getItem(tokenKey) || "");
-  const [user, setUser] = useState<AuthUser | null>(() => readStoredUser());
-  const [status, setStatus] = useState<AuthStatus>(() => (localStorage.getItem(tokenKey) ? "checking" : "guest"));
+  const [token, setToken] = useState(() => (isLocalDevAuthEnabled() ? localDevToken : localStorage.getItem(tokenKey) || ""));
+  const [user, setUser] = useState<AuthUser | null>(() => (isLocalDevAuthEnabled() ? localDevUser : readStoredUser()));
+  const [status, setStatus] = useState<AuthStatus>(() => (isLocalDevAuthEnabled() ? "authenticated" : localStorage.getItem(tokenKey) ? "checking" : "guest"));
   const [notice, setNotice] = useState(() => localStorage.getItem(noticeKey) || "");
   const channelRef = useRef<BroadcastChannel | null>(null);
 
@@ -85,6 +100,11 @@ export function AuthProvider(props: { children: ReactNode }) {
   }, []);
 
   const checkSession = useCallback(async () => {
+    if (isLocalDevAuthEnabled()) {
+      persistAuth(localDevToken, localDevUser);
+      return;
+    }
+
     const currentToken = localStorage.getItem(tokenKey);
     if (!currentToken) {
       clearAuth();

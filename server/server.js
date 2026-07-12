@@ -25,6 +25,16 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const rootDir = path.resolve(__dirname, "..");
 const distDir = path.join(rootDir, "dist");
+const localDevToken = "zhenlin-local-dev-token";
+const localDevUser = {
+  id: "local-dev-user",
+  username: "local-dev",
+  displayName: "本地开发",
+  role: "admin",
+  status: "active",
+  lastLoginAt: "",
+  mustChangePassword: false,
+};
 
 loadEnvFile(path.join(rootDir, ".env"));
 const port = Number(process.env.PORT || process.env.AUTH_PORT || 4100);
@@ -84,8 +94,25 @@ function getBearerToken(req) {
   return match?.[1] || "";
 }
 
+function isLocalRequest(req) {
+  const remoteAddress = req.socket.remoteAddress || "";
+  const host = String(req.headers.host || "").toLowerCase();
+  const isLocalHost =
+    host.startsWith("127.0.0.1") ||
+    host.startsWith("localhost") ||
+    host.startsWith("[::1]");
+  const isLoopback =
+    remoteAddress === "127.0.0.1" ||
+    remoteAddress === "::1" ||
+    remoteAddress === "::ffff:127.0.0.1";
+  return isLocalHost && isLoopback;
+}
+
 function authenticate(req) {
   const token = getBearerToken(req);
+  if (token === localDevToken && isLocalRequest(req) && process.env.NODE_ENV !== "production") {
+    return { user: localDevUser, payload: { userId: localDevUser.id, username: localDevUser.username, role: localDevUser.role, sessionId: "local-dev" }, db: null, isLocalDev: true };
+  }
   if (!token) return { error: ["UNAUTHORIZED", "请先登录"] };
   try {
     const payload = verifyToken(token);
@@ -141,7 +168,7 @@ async function handleApi(req, res, pathname) {
 
   if (pathname === "/api/auth/logout" && req.method === "POST") {
     const result = authenticate(req);
-    if (!result.error) {
+    if (!result.error && !result.isLocalDev) {
       result.user.currentSessionId = "";
       result.user.updatedAt = new Date().toISOString();
       writeDb(result.db);
