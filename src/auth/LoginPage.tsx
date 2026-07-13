@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Navigate, useLocation, useNavigate } from "react-router-dom";
 import { ArrowRight, LockKeyhole, UserRound } from "lucide-react";
 import { Orb } from "../components/common/Orb";
+import { ZhenlinLogoStage } from "../components/common/ZhenlinLogoStage";
 import { useAuth } from "./AuthContext";
 import "./auth.css";
 
@@ -46,11 +47,10 @@ export function LoginPage() {
         }}
       >
         <div className="login-brand">
-          <img alt="" className="login-brand-logo" src="/zhenlin-logo-white.png" />
+          <ZhenlinLogoStage className="login-brand-logo" />
         </div>
         <div className="login-form-head">
-          <span>系统登录</span>
-          <strong>臻林客户对账OS</strong>
+          <strong>Customer Reconciliation OS</strong>
         </div>
 
         {auth.notice && (
@@ -64,14 +64,12 @@ export function LoginPage() {
         {error && <div className="login-error">{error}</div>}
 
         <label className="login-field">
-          <span>账号</span>
           <div>
             <UserRound size={18} />
             <input autoComplete="username" onChange={(event) => setUsername(event.target.value)} placeholder="请输入账号" value={username} />
           </div>
         </label>
         <label className="login-field">
-          <span>密码</span>
           <div>
             <LockKeyhole size={18} />
             <input
