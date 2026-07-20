@@ -214,14 +214,23 @@
 }
 
 .recon-cloud-notice {
-  margin: -4px 0 14px;
-  padding: 9px 12px;
+  position: fixed;
+  top: 18px;
+  right: 22px;
+  z-index: 60;
+  min-width: 188px;
+  max-width: min(360px, calc(100vw - 44px));
+  padding: 10px 14px;
   border: 1px solid #cfd8e5;
   border-radius: 8px;
+  box-shadow: 0 14px 32px rgba(16, 28, 45, 0.14);
   background: #f8fafc;
   color: #546275;
   font-size: 12px;
   font-weight: 800;
+  line-height: 1.5;
+  pointer-events: none;
+  animation: reconToastIn 180ms ease-out;
 }
 
 .recon-cloud-notice.is-ready {
@@ -241,6 +250,17 @@
   border-color: #fecaca;
   background: #fef2f2;
   color: #b42318;
+}
+
+@keyframes reconToastIn {
+  from {
+    opacity: 0;
+    transform: translateY(-8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .recon-topbar-actions,
@@ -306,6 +326,7 @@
 .recon-stat-card,
 .recon-customer-panel,
 .recon-account-panel,
+.recon-detail-side,
 .recon-simple-panel,
 .recon-placeholder {
   border: 1px solid #d9e0ea;
@@ -323,11 +344,12 @@
 }
 
 .recon-filterbar-monthly {
-  grid-template-columns: minmax(150px, 1fr) minmax(130px, 0.68fr) minmax(140px, 0.82fr) minmax(130px, 0.72fr) auto auto;
+  grid-template-columns: minmax(170px, 240px) minmax(170px, 240px) minmax(210px, 260px);
+  justify-content: end;
 }
 
 .recon-add-statement-filter {
-  grid-column: 5 / 7;
+  grid-column: auto;
   justify-self: stretch;
 }
 
@@ -358,6 +380,19 @@
 .recon-field textarea {
   min-height: 82px;
   resize: vertical;
+}
+
+.readonly-field {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  padding: 7px 10px;
+  border: 1px solid #e1e7ef;
+  border-radius: 6px;
+  background: #f5f7fa;
+  color: #172033;
+  font-size: 13px;
+  font-weight: 800;
 }
 
 .animated-select {
@@ -594,16 +629,27 @@
 
 .recon-ledger {
   display: grid;
-  grid-template-columns: 286px minmax(0, 1fr);
+  grid-template-columns: 260px minmax(0, 1fr) minmax(360px, 24vw);
   gap: 14px;
-  align-items: start;
+  align-items: stretch;
+  height: max(620px, calc(100vh - 292px));
+  min-height: 0;
 }
 
 .recon-customer-panel,
 .recon-account-panel,
+.recon-detail-side,
 .recon-simple-panel {
   min-width: 0;
   overflow: hidden;
+}
+
+.recon-customer-panel,
+.recon-account-panel,
+.recon-detail-side {
+  display: flex;
+  min-height: 0;
+  flex-direction: column;
 }
 
 .recon-panel-head {
@@ -613,6 +659,7 @@
   gap: 12px;
   padding: 15px 16px;
   border-bottom: 1px solid #e4e9f0;
+  background: #f2f8fc;
 }
 
 .recon-panel-head strong {
@@ -648,8 +695,8 @@
 .recon-customer-list {
   display: grid;
   gap: 8px;
-  max-height: calc(100vh - 360px);
-  min-height: 420px;
+  flex: 1;
+  min-height: 0;
   overflow: auto;
   padding: 10px;
 }
@@ -700,6 +747,7 @@
   align-items: center;
   padding: 16px;
   border-bottom: 1px solid #e4e9f0;
+  background: #f2f8fc;
 }
 
 .recon-customer-summary h2,
@@ -730,13 +778,63 @@
 }
 
 .recon-statement-summary {
-  grid-template-columns: minmax(320px, 1fr) minmax(420px, 1.15fr);
-  align-items: start;
+  grid-template-columns: minmax(260px, 1fr) minmax(420px, auto);
+  align-items: stretch;
+  gap: 0;
+  padding: 0;
+  border-bottom: 0;
+  background: #ffffff;
 }
 
 .recon-statement-summary .recon-topbar-actions {
+  grid-column: 1 / -1;
   flex-wrap: wrap;
+  justify-content: space-between;
+  padding: 14px 16px;
+  background: #ffffff;
+}
+
+.recon-statement-actions-left,
+.recon-statement-actions-right {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.recon-statement-actions-right {
   justify-content: flex-end;
+}
+
+.recon-statement-summary > div:first-child,
+.recon-statement-filter-actions {
+  padding: 16px;
+  border-bottom: 1px solid #e4e9f0;
+  background: #f2f8fc;
+}
+
+.recon-statement-filter-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.recon-statement-filter-actions label {
+  display: grid;
+  gap: 0;
+  min-width: 132px;
+  color: #546275;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.recon-statement-filter-actions .animated-select {
+  min-width: 132px;
+}
+
+.recon-statement-filter-actions .recon-button {
+  min-width: 166px;
 }
 
 .statement-status-control {
@@ -757,11 +855,15 @@
 }
 
 .statement-status-control label span {
-  display: inline;
+  display: inline-block;
+  width: auto;
+  min-width: 48px;
   margin: 0;
   color: #66778b;
   font-size: 12px;
+  line-height: 1.15;
   letter-spacing: 0;
+  white-space: nowrap;
 }
 
 .statement-status-control select {
@@ -777,6 +879,22 @@
   font-weight: 900;
   text-align: center;
   text-align-last: center;
+}
+
+.statement-status-placeholder {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-start;
+  width: 88px;
+  min-width: 88px;
+  min-height: 30px;
+  padding: 4px 22px 4px 8px;
+  border: 1px solid #cfd8e5;
+  border-radius: 7px;
+  background: #ffffff;
+  color: #66778b;
+  font-size: 13px;
+  font-weight: 900;
 }
 
 .statement-status-control em {
@@ -798,7 +916,31 @@
 
 .recon-table-wrap {
   max-width: 100%;
+  min-width: 0;
   overflow: auto;
+}
+
+.recon-style-table-wrap {
+  flex: 1;
+  min-height: 0;
+}
+
+.recon-account-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 16px;
+  border-top: 1px solid #e4e9f0;
+  background: #ffffff;
+  color: #6f7f93;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.recon-account-footer .recon-detail-total {
+  flex-wrap: wrap;
+  justify-content: flex-end;
 }
 
 .recon-table {
@@ -806,6 +948,58 @@
   min-width: 940px;
   border-collapse: collapse;
   font-size: 13px;
+}
+
+.recon-style-table {
+  min-width: 760px;
+  table-layout: fixed;
+}
+
+.recon-style-table th:first-child,
+.recon-style-table td:first-child {
+  width: 15%;
+}
+
+.recon-style-table th:nth-child(2),
+.recon-style-table td:nth-child(2) {
+  width: 12%;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.recon-style-table th:nth-child(3),
+.recon-style-table td:nth-child(3),
+.recon-style-table th:nth-child(4),
+.recon-style-table td:nth-child(4),
+.recon-style-table th:nth-child(5),
+.recon-style-table td:nth-child(5),
+.recon-style-table th:nth-child(6),
+.recon-style-table td:nth-child(6) {
+  width: 11%;
+  white-space: nowrap;
+  text-align: left;
+}
+
+.recon-style-table th:nth-child(7),
+.recon-style-table td:nth-child(7) {
+  width: 13%;
+  text-align: left;
+}
+
+.recon-style-table td:nth-child(7) .status-pills {
+  justify-content: flex-start;
+}
+
+.recon-style-table th:last-child,
+.recon-style-table td:last-child {
+  width: 10%;
+  min-width: 88px;
+  max-width: 118px;
+  text-align: left;
+}
+
+.recon-style-table td:last-child .recon-row-actions {
+  justify-content: flex-start;
 }
 
 .recon-table th,
@@ -863,7 +1057,7 @@
 }
 
 .recon-table tr.is-active-row td {
-  background: #f2fbfd;
+  background: #e5f3f8;
 }
 
 .recon-link-button,
@@ -895,15 +1089,15 @@
 .recon-status-pills {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px;
-  min-width: 118px;
+  gap: 4px;
+  min-width: 132px;
 }
 
 .recon-status-pills span {
   display: inline-flex;
   min-height: 24px;
   align-items: center;
-  padding: 3px 8px;
+  padding: 3px 7px;
   border-radius: 999px;
   font-size: 12px;
   font-weight: 900;
@@ -946,7 +1140,11 @@
 }
 
 .recon-detail {
-  border-top: 1px solid #e4e9f0;
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  border-top: 0;
 }
 
 .recon-detail-head {
@@ -954,11 +1152,29 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 15px 16px 10px;
+  min-height: 68px;
+  box-sizing: border-box;
+  padding: 13px 16px;
+  border-bottom: 1px solid #e4e9f0;
+  background: #f2f8fc;
 }
 
 .recon-detail-head h3 {
+  margin: 0;
   font-size: 18px;
+}
+
+.recon-detail-style-no {
+  max-width: 58%;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: #ffffff;
+  color: #405169;
+  font-size: 12px;
+  font-weight: 900;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .recon-detail-total {
@@ -979,8 +1195,16 @@
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 0 16px 12px;
+  box-sizing: border-box;
+  padding: 14px 16px;
   border-bottom: 1px solid #e4e9f0;
+}
+
+.recon-detail-side .recon-empty {
+  flex: 1;
+  display: grid;
+  place-items: center;
+  margin: 0;
 }
 
 .recon-tabs {
@@ -1013,7 +1237,36 @@
 }
 
 .recon-record-card {
+  min-height: 0;
+  overflow: auto;
   padding-bottom: 12px;
+}
+
+.recon-detail-info-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.recon-detail-info-table th,
+.recon-detail-info-table td {
+  padding: 12px 16px;
+  border-bottom: 1px solid #e7ecf2;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.recon-detail-info-table th {
+  width: 116px;
+  background: #f5f7fa;
+  color: #546275;
+  font-weight: 900;
+  white-space: nowrap;
+}
+
+.recon-detail-info-table td {
+  color: #26364d;
+  font-weight: 800;
 }
 
 .recon-record-actions {
@@ -1028,6 +1281,112 @@
 
 .recon-table-compact {
   min-width: 680px;
+}
+
+.is-adjustment-positive {
+  color: #b42318 !important;
+  font-weight: 900;
+}
+
+.is-adjustment-negative {
+  color: #027a48 !important;
+  font-weight: 900;
+}
+
+.recon-allocation-card-list,
+.recon-mini-card-list {
+  display: grid;
+  gap: 10px;
+  min-height: 0;
+  overflow: auto;
+  padding: 12px;
+}
+
+.recon-allocation-card,
+.recon-mini-card {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #d8e1eb;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.recon-allocation-card-head,
+.recon-mini-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.recon-allocation-card span,
+.recon-allocation-card dt,
+.recon-mini-card span,
+.recon-mini-card dt {
+  color: #6f7f93;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.recon-allocation-card strong,
+.recon-mini-card strong {
+  display: block;
+  margin-top: 4px;
+  color: #172033;
+  font-size: 15px;
+}
+
+.recon-allocation-card dl,
+.recon-mini-card dl {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+}
+
+.recon-allocation-card dl div,
+.recon-mini-card dl div {
+  display: grid;
+  grid-template-columns: 72px minmax(0, 1fr);
+  gap: 10px;
+  align-items: baseline;
+}
+
+.recon-allocation-card dd,
+.recon-mini-card dd {
+  min-width: 0;
+  margin: 0;
+  color: #26364d;
+  font-size: 13px;
+  font-weight: 800;
+  overflow-wrap: anywhere;
+}
+
+.recon-adjustment-card-list {
+  align-content: start;
+}
+
+.recon-adjustment-total {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #d8e1eb;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.recon-adjustment-total span {
+  color: #546275;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.recon-adjustment-total strong {
+  color: #172033;
+  font-size: 15px;
+  font-weight: 900;
 }
 
 .recon-empty {
@@ -1480,6 +1839,16 @@
   font-weight: 800;
 }
 
+.receipt-edit-summary {
+  padding: 10px 12px;
+  border: 1px solid #e1e7ef;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #546275;
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .receipt-pool__footer {
   position: sticky;
   bottom: 0;
@@ -1854,11 +2223,11 @@
   }
 
   .recon-statement-summary .recon-topbar-actions {
-    justify-content: flex-start;
+    justify-content: space-between;
   }
 }
 
-@media (max-width: 1180px) {
+@media (max-width: 1320px) {
   .recon-filterbar {
     grid-template-columns: repeat(3, minmax(0, 1fr));
   }

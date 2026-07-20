@@ -1,84 +1,83 @@
-import { paymentMethods, type PaymentMethod } from "../models";
 import { readSpreadsheetRows } from "./customerProfileImport";
 
-export type ReceiptImportRow = {
+export type InvoiceImportRow = {
   amount: number;
   customerName: string;
-  method: PaymentMethod;
+  invoiceDate: string;
+  invoiceNo: string;
   note: string;
-  receiptDate: string;
   sourceRow: number;
-  transactionNo: string;
+  styleNo: string;
 };
 
-export type ReceiptImportResult = {
-  rows: ReceiptImportRow[];
+export type InvoiceImportResult = {
+  rows: InvoiceImportRow[];
   warnings: string[];
 };
 
 const columnAliases = {
-  amount: ["金额", "收款金额", "借方发生额"],
-  customerName: ["客户", "客户名称", "客户简称", "客户全称", "对方户名"],
-  method: ["收款方式", "方式"],
-  note: ["备注", "摘要"],
-  receiptDate: ["收款日期", "日期", "交易日期"],
-  transactionNo: ["流水号", "银行流水号", "核心流水", "流水号 承兑编号", "流水号/ 承兑编号", "承兑编号"],
+  amount: ["开票金额", "发票金额", "金额", "价税合计", "合计金额", "含税金额", "不含税金额"],
+  customerName: ["客户", "客户名称", "客户简称", "客户全称", "购方名称", "购买方名称", "购买方", "对方户名"],
+  invoiceDate: ["开票日期", "发票日期", "日期", "业务日期"],
+  invoiceNo: ["发票号码", "发票号", "发票编号", "号码", "数电票号码", "电子发票号码"],
+  note: ["备注", "摘要", "商品名称", "项目名称"],
+  styleNo: ["款号", "货号", "订单号", "客户款号", "规格型号", "型号"],
 } as const;
 
-export async function readReceiptImportFile(file: File): Promise<ReceiptImportResult> {
+export async function readInvoiceImportFile(file: File): Promise<InvoiceImportResult> {
   const rows = await readSpreadsheetRows(file);
-  return parseReceiptRows(rows);
+  return parseInvoiceRows(rows);
 }
 
-function parseReceiptRows(rows: string[][]): ReceiptImportResult {
+function parseInvoiceRows(rows: string[][]): InvoiceImportResult {
   const warnings: string[] = [];
   const headerIndex = rows.findIndex((row) => {
     const headerMap = buildHeaderMap(row);
-    return headerMap.customerName >= 0 && headerMap.receiptDate >= 0 && headerMap.amount >= 0;
+    return headerMap.customerName >= 0 && headerMap.invoiceDate >= 0 && headerMap.amount >= 0;
   });
 
   if (headerIndex < 0) {
     return {
       rows: [],
-      warnings: ["没有找到表头行，请确认 Excel 包含：对方户名、交易日期、借方发生额。"],
+      warnings: ["没有找到表头行，请确认 Excel 至少包含：客户/购方名称、开票日期、开票金额。"],
     };
   }
 
   const headerMap = buildHeaderMap(rows[headerIndex]);
-  const parsedRows: ReceiptImportRow[] = [];
+  const parsedRows: InvoiceImportRow[] = [];
 
   rows.slice(headerIndex + 1).forEach((row, offset) => {
     const sourceRow = headerIndex + offset + 2;
     if (row.every((cell) => !String(cell ?? "").trim())) return;
 
     const customerName = getCell(row, headerMap.customerName);
-    const receiptDate = normalizeDate(getCell(row, headerMap.receiptDate));
+    const invoiceDate = normalizeDate(getCell(row, headerMap.invoiceDate));
     const amount = parseAmount(getCell(row, headerMap.amount));
-    const method = normalizeMethod(getCell(row, headerMap.method));
-    const transactionNo = getCell(row, headerMap.transactionNo);
+    const invoiceNo = getCell(row, headerMap.invoiceNo);
+    const styleNo = getCell(row, headerMap.styleNo);
     const note = getCell(row, headerMap.note);
 
     if (!customerName) {
-      warnings.push(`第 ${sourceRow} 行对方户名为空，已跳过。`);
+      warnings.push(`第 ${sourceRow} 行客户/购方名称为空，已跳过。`);
       return;
     }
-    if (!receiptDate) {
-      warnings.push(`第 ${sourceRow} 行交易日期无效，已跳过。`);
+    if (!invoiceDate) {
+      warnings.push(`第 ${sourceRow} 行开票日期无效，已跳过。`);
       return;
     }
     if (amount <= 0) {
-      warnings.push(`第 ${sourceRow} 行借方发生额必须大于 0，已跳过。`);
+      warnings.push(`第 ${sourceRow} 行开票金额必须大于 0，已跳过。`);
       return;
     }
 
     parsedRows.push({
       amount,
       customerName,
-      method,
+      invoiceDate,
+      invoiceNo,
       note,
-      receiptDate,
       sourceRow,
-      transactionNo,
+      styleNo,
     });
   });
 
@@ -92,10 +91,10 @@ function buildHeaderMap(headers: string[]) {
   return {
     amount: findIndex(columnAliases.amount),
     customerName: findIndex(columnAliases.customerName),
-    method: findIndex(columnAliases.method),
+    invoiceDate: findIndex(columnAliases.invoiceDate),
+    invoiceNo: findIndex(columnAliases.invoiceNo),
     note: findIndex(columnAliases.note),
-    receiptDate: findIndex(columnAliases.receiptDate),
-    transactionNo: findIndex(columnAliases.transactionNo),
+    styleNo: findIndex(columnAliases.styleNo),
   };
 }
 
@@ -137,8 +136,4 @@ function normalizeDate(value: string) {
   }
 
   return "";
-}
-
-function normalizeMethod(value: string): PaymentMethod {
-  return paymentMethods.includes(value as PaymentMethod) ? (value as PaymentMethod) : "银行转账";
 }

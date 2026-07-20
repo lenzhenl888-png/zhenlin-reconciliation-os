@@ -57,6 +57,7 @@ import {
   type CustomerProfileImportRow,
 } from "./utils/customerProfileImport";
 import { readReceiptImportFile, type ReceiptImportRow } from "./utils/receiptImport";
+import { readInvoiceImportFile, type InvoiceImportRow } from "./utils/invoiceImport";
 import {
   accountMatchesStatus,
   formatMoney,
@@ -708,6 +709,15 @@ export function ReconciliationApp() {
     }));
   }
 
+  function updateReceipt(receipt: CustomerReceipt) {
+    updateStore((currentStore) => ({
+      ...currentStore,
+      customerReceipts: currentStore.customerReceipts.map((item) =>
+        item.id === receipt.id ? { ...receipt, amount: roundMoney(receipt.amount), updatedAt: getTodayString() } : item,
+      ),
+    }));
+  }
+
   function importReceipts(rows: ReceiptImportRow[], parseWarnings: string[]) {
     if (rows.length === 0) {
       window.alert(parseWarnings[0] ?? "没有可导入的收款记录。");
@@ -731,19 +741,29 @@ export function ReconciliationApp() {
         const keyword = normalize(customerName);
         const matched = currentStore.customers.filter((customer) => {
           const profile = currentStore.customerProfiles.find((item) => item.id === customer.id);
-          return [customer.name, profile?.shortName, profile?.fullName].some((name) => normalize(name) === keyword);
+          return [customer.name, profile?.shortName, profile?.fullName].some((name) => {
+            const normalizedName = normalize(name);
+            return normalizedName === keyword || normalizedName.includes(keyword) || keyword.includes(normalizedName);
+          });
         });
         return matched.length === 1 ? matched[0].id : "";
       }
 
       function isDuplicate(receipt: CustomerReceipt) {
+        const transactionNo = normalize(receipt.transactionNo);
         return nextReceipts.some(
-          (item) =>
-            item.customerId === receipt.customerId &&
-            item.receiptDate === receipt.receiptDate &&
-            item.amount === receipt.amount &&
-            item.method === receipt.method &&
-            normalize(item.transactionNo) === normalize(receipt.transactionNo),
+          (item) => {
+            const existingTransactionNo = normalize(item.transactionNo);
+            if (transactionNo && existingTransactionNo === transactionNo) return true;
+            return (
+              !transactionNo &&
+              item.customerId === receipt.customerId &&
+              item.receiptDate === receipt.receiptDate &&
+              item.amount === receipt.amount &&
+              item.method === receipt.method &&
+              existingTransactionNo === transactionNo
+            );
+          },
         );
       }
 
@@ -782,6 +802,102 @@ export function ReconciliationApp() {
 
     const warningText = warnings.length > 0 ? `\n\n提示：\n${warnings.slice(0, 8).join("\n")}${warnings.length > 8 ? "\n..." : ""}` : "";
     window.alert(`收款导入完成：新增 ${addedCount} 笔，重复 ${duplicatedCount} 笔，跳过 ${skippedCount} 行。${warningText}`);
+  }
+
+  function importInvoices(rows: InvoiceImportRow[], parseWarnings: string[]) {
+    if (rows.length === 0) {
+      window.alert(parseWarnings[0] ?? "没有可导入的开票记录。");
+      return;
+    }
+
+    let addedCount = 0;
+    let duplicatedCount = 0;
+    let skippedCount = 0;
+    const warnings = [...parseWarnings];
+
+    updateStore((currentStore) => {
+      function normalize(value?: string) {
+        return (value ?? "").trim().toLowerCase();
+      }
+
+      function findCustomerId(customerName: string) {
+        const keyword = normalize(customerName);
+        const matched = currentStore.customers.filter((customer) => {
+          const profile = currentStore.customerProfiles.find((item) => item.id === customer.id);
+          return [customer.name, profile?.shortName, profile?.fullName, profile?.invoiceTitle].some((name) => {
+            const normalizedName = normalize(name);
+            return normalizedName === keyword || normalizedName.includes(keyword) || keyword.includes(normalizedName);
+          });
+        });
+        return matched.length === 1 ? matched[0].id : "";
+      }
+
+      function findStyleAccount(customerId: string, styleNo: string) {
+        const keyword = normalize(styleNo);
+        if (!keyword) return undefined;
+        const matched = currentStore.styleAccounts.filter(
+          (account) => account.customerId === customerId && normalize(account.styleNo) === keyword,
+        );
+        return matched.length === 1 ? matched[0] : undefined;
+      }
+
+      const nextStyleAccounts = currentStore.styleAccounts.map((account) => ({
+        ...account,
+        invoiceRecords: [...account.invoiceRecords],
+      }));
+
+      function isDuplicate(record: InvoiceRecord) {
+        const invoiceNo = normalize(record.invoiceNo);
+        return nextStyleAccounts.some((account) =>
+          account.invoiceRecords.some((item) => {
+            const existingInvoiceNo = normalize(item.invoiceNo);
+            if (invoiceNo && existingInvoiceNo === invoiceNo) return true;
+            return !invoiceNo && item.date === record.date && item.amount === record.amount && existingInvoiceNo === invoiceNo;
+          }),
+        );
+      }
+
+      rows.forEach((row) => {
+        const customerId = findCustomerId(row.customerName);
+        if (!customerId) {
+          skippedCount += 1;
+          warnings.push(`第 ${row.sourceRow} 行客户“${row.customerName}”未匹配到唯一客户，已跳过。`);
+          return;
+        }
+
+        const targetAccount = findStyleAccount(customerId, row.styleNo);
+        if (!targetAccount) {
+          skippedCount += 1;
+          warnings.push(`第 ${row.sourceRow} 行款号“${row.styleNo || "空"}”未匹配到该客户下唯一款号，已跳过。`);
+          return;
+        }
+
+        const record: InvoiceRecord = {
+          id: createId("invoice"),
+          date: row.invoiceDate,
+          invoiceNo: row.invoiceNo,
+          amount: roundMoney(row.amount),
+          remark: row.note,
+        };
+
+        if (isDuplicate(record)) {
+          duplicatedCount += 1;
+          return;
+        }
+
+        const account = nextStyleAccounts.find((item) => item.id === targetAccount.id);
+        account?.invoiceRecords.unshift(record);
+        addedCount += 1;
+      });
+
+      return {
+        ...currentStore,
+        styleAccounts: nextStyleAccounts,
+      };
+    });
+
+    const warningText = warnings.length > 0 ? `\n\n提示：\n${warnings.slice(0, 8).join("\n")}${warnings.length > 8 ? "\n..." : ""}` : "";
+    window.alert(`开票导入完成：新增 ${addedCount} 条，重复 ${duplicatedCount} 条，跳过 ${skippedCount} 行。${warningText}`);
   }
 
   function createAllocation(values: ReceiptAllocation | ReceiptAllocation[]) {
@@ -1005,9 +1121,6 @@ export function ReconciliationApp() {
           })}
         </nav>
 
-        <div className="recon-sidebar-foot">
-          <span>本地 MVP</span>
-        </div>
       </aside>
 
       <main className="recon-main">
@@ -1065,8 +1178,16 @@ export function ReconciliationApp() {
             onPreview={() => selectedStatementSummary && setModal({ type: "statementPreview" })}
             onSaveAdjustment={upsertStatementAdjustment}
             onStatementStatusChange={(status) => selectedStatement && updateStatementStatus(selectedStatement.id, status)}
-            onFiltersChange={setDraftFilters}
-            onPeriodChange={setSelectedPeriod}
+            onFiltersChange={(nextFilters) => {
+              setDraftFilters(nextFilters);
+              setFilters(nextFilters);
+            }}
+            onPeriodChange={(period) => {
+              const nextFilters = { ...draftFilters, customerName: "", styleNo: "" };
+              setSelectedPeriod(period);
+              setDraftFilters(nextFilters);
+              setFilters(nextFilters);
+            }}
             onResetFilters={() => {
               setDraftFilters(emptyFilters);
               setFilters(emptyFilters);
@@ -1105,13 +1226,15 @@ export function ReconciliationApp() {
         {activeModule === "payments" && (
           <ReceiptPoolModule
             allocations={store.receiptAllocations}
+            customerProfiles={store.customerProfiles}
             customers={store.customers}
             onAllocate={(customerId) => setModal({ type: "allocation", customerId })}
             onImport={importReceipts}
+            onSaveReceipt={updateReceipt}
             receipts={store.customerReceipts}
           />
         )}
-        {activeModule === "invoices" && <InvoiceRecordsModule customers={store.customers} styleAccounts={store.styleAccounts} />}
+        {activeModule === "invoices" && <InvoiceRecordsModule customers={store.customers} onImport={importInvoices} styleAccounts={store.styleAccounts} />}
         {activeModule === "settings" && <SettingsModule />}
       </main>
 
@@ -1267,55 +1390,6 @@ function CustomerStatementPanel(props: {
 
   return (
     <div className="recon-workspace">
-      <section className="recon-filterbar recon-filterbar-monthly" aria-label="筛选区">
-        <label>
-          客户名称
-          <input
-            onChange={(event) => props.onFiltersChange({ ...props.draftFilters, customerName: event.target.value })}
-            placeholder="输入客户名称"
-            value={props.draftFilters.customerName}
-          />
-        </label>
-        <label>
-          对账月份
-          <AnimatedSelect
-            ariaLabel="对账月份"
-            onChange={props.onPeriodChange}
-            options={toSelectOptions(props.periods)}
-            value={props.selectedPeriod}
-          />
-        </label>
-        <label>
-          款号
-          <input
-            onChange={(event) => props.onFiltersChange({ ...props.draftFilters, styleNo: event.target.value })}
-            placeholder="输入款号"
-            value={props.draftFilters.styleNo}
-          />
-        </label>
-        <label>
-          对账状态
-          <AnimatedSelect
-            ariaLabel="对账状态"
-            onChange={(value) => props.onFiltersChange({ ...props.draftFilters, status: value as AccountStatus | "" })}
-            options={[{ label: "全部状态", value: "" }, ...toSelectOptions(accountStatusOptions)]}
-            value={props.draftFilters.status}
-          />
-        </label>
-        <button className="recon-button recon-button-primary" onClick={props.onApplyFilters} type="button">
-          <Search size={16} />
-          查询
-        </button>
-        <button className="recon-button recon-button-light" onClick={props.onResetFilters} type="button">
-          <RotateCcw size={16} />
-          重置
-        </button>
-        <button className="recon-button recon-button-primary recon-add-statement-filter" onClick={props.onAddStatement} type="button">
-          <Plus size={16} />
-          新增月度对账单
-        </button>
-      </section>
-
       <section className="recon-stat-grid recon-stat-grid-seven" aria-label="月度统计卡片">
         <StatCard label="账单期初余额" value={props.selectedStatementSummary?.openingBalance ?? 0} icon={Banknote} />
         <StatCard label="实时期初余额" value={props.selectedStatementSummary?.realtimeOpeningBalance ?? 0} icon={RotateCcw} />
@@ -1373,50 +1447,58 @@ function CustomerStatementPanel(props: {
         <div className="recon-account-panel">
           <div className="recon-customer-summary recon-statement-summary">
             <div>
-              <span>当前客户 / 对账月份</span>
               <h2>{props.selectedCustomerName} / {props.selectedPeriod}</h2>
-              {props.statement && (
-                <div className="statement-status-control">
-                  <label>
-                    <span>账单状态</span>
-                    <AnimatedSelect
-                      ariaLabel="账单状态"
-                      onChange={(value) => props.onStatementStatusChange(value as StatementStatus)}
-                      options={toSelectOptions(["草稿", "已确认"])}
-                      value={props.statement.status === "已结清" ? "已确认" : props.statement.status}
-                    />
-                  </label>
-                  {props.selectedStatementSummary?.status === "已结清" && <em>系统判断：已结清</em>}
-                  {props.statement.note && <small>{props.statement.note}</small>}
-                  {hasOpeningBalanceDifference && (
-                    <small className="realtime-opening-note">
-                      上月余额已变化，实时期初余额 ¥ {formatMoney(props.selectedStatementSummary?.realtimeOpeningBalance ?? 0)}
-                    </small>
-                  )}
-                </div>
-              )}
+              {props.statement?.note && <small>{props.statement.note}</small>}
+            </div>
+            <div className="recon-statement-filter-actions">
+              <label>
+                <AnimatedSelect
+                  ariaLabel="对账月份"
+                  onChange={props.onPeriodChange}
+                  options={toSelectOptions(props.periods)}
+                  value={props.selectedPeriod}
+                />
+              </label>
+              <label>
+                <AnimatedSelect
+                  ariaLabel="对账状态"
+                  onChange={(value) =>
+                    props.onFiltersChange({ customerName: "", styleNo: "", status: value as AccountStatus | "" })
+                  }
+                  options={[{ label: "全部状态", value: "" }, ...toSelectOptions(accountStatusOptions)]}
+                  value={props.draftFilters.status}
+                />
+              </label>
+              <button className="recon-button recon-button-primary" onClick={props.onAddStatement} type="button">
+                <Plus size={16} />
+                新增月度对账单
+              </button>
             </div>
             <div className="recon-topbar-actions recon-statement-actions">
-              <button className="recon-button recon-button-light" onClick={props.onOpenReceiptPool} type="button">
-                <CreditCard size={16} />
-                收款池
-              </button>
-              <button className="recon-button recon-button-light" disabled={!props.statement} onClick={props.onAddAllocation} type="button">
-                <ReceiptText size={16} />
-                收款分配
-              </button>
-              <button className="recon-button recon-button-light" disabled={!props.statement} onClick={props.onExport} type="button">
-                <FileDown size={16} />
-                导出 Word
-              </button>
-              <button className="recon-button recon-button-light" disabled={!props.statement} onClick={props.onPreview} type="button">
-                <Eye size={16} />
-                预览对账单
-              </button>
-              <button className="recon-button recon-button-primary recon-statement-add-item" disabled={!props.statement} onClick={props.onAddItem} type="button">
-                <Plus size={16} />
-                新增款号应收
-              </button>
+              <div className="recon-statement-actions-left">
+                <button className="recon-button recon-button-light" disabled={!props.statement} onClick={props.onExport} type="button">
+                  <FileDown size={16} />
+                  导出 Word
+                </button>
+                <button className="recon-button recon-button-light" disabled={!props.statement} onClick={props.onPreview} type="button">
+                  <Eye size={16} />
+                  预览对账单
+                </button>
+              </div>
+              <div className="recon-statement-actions-right">
+                <button className="recon-button recon-button-light" onClick={props.onOpenReceiptPool} type="button">
+                  <CreditCard size={16} />
+                  收款池
+                </button>
+                <button className="recon-button recon-button-light" disabled={!props.statement} onClick={props.onAddAllocation} type="button">
+                  <ReceiptText size={16} />
+                  收款分配
+                </button>
+                <button className="recon-button recon-button-primary recon-statement-add-item" disabled={!props.statement} onClick={props.onAddItem} type="button">
+                  <Plus size={16} />
+                  新增款号应收
+                </button>
+              </div>
             </div>
           </div>
 
@@ -1424,8 +1506,8 @@ function CustomerStatementPanel(props: {
             <EmptyPanel text="当前客户在该月份还没有月度对账单，请先新增月度对账单。" />
           ) : (
             <>
-              <div className="recon-table-wrap">
-                <table className="recon-table">
+              <div className="recon-table-wrap recon-style-table-wrap">
+                <table className="recon-table recon-style-table">
                   <thead>
                     <tr>
                       <th>款号</th>
@@ -1478,28 +1560,43 @@ function CustomerStatementPanel(props: {
                 </table>
                 {props.filteredItems.length === 0 && <EmptyPanel text="当前月度对账单没有符合条件的款号。" />}
               </div>
-
-              <StatementDetail
-                account={props.selectedAccount}
-                adjustments={props.selectedStatementSummary!.adjustments}
-                allocations={props.receiptAllocations}
-                detailTab={props.detailTab}
-                itemSummary={props.selectedItemSummary}
-                onAddInvoice={props.onAddInvoice}
-                onDeleteAdjustment={props.onDeleteAdjustment}
-                onDeleteAllocation={props.onDeleteAllocation}
-                onDeleteInvoice={props.onDeleteInvoice}
-                onEditInvoice={props.onEditInvoice}
-                onSaveAdjustment={props.onSaveAdjustment}
-                onSetDetailTab={props.onSetDetailTab}
-                receipts={props.receipts}
-                statement={props.statement}
-                statementId={props.statement.id}
-                statementItems={props.selectedStatementSummary!.items}
-              />
+              {props.selectedItemSummary && (
+                <div className="recon-account-footer">
+                  <span>当前款号：{props.selectedItemSummary.styleAccount?.styleNo ?? "-"}</span>
+                  <div className="recon-detail-total">
+                    <span>应收 ¥ {formatMoney(props.selectedItemSummary.receivableAmount)}</span>
+                    <span>款号未收 ¥ {formatMoney(props.selectedItemSummary.unpaidAmount)}</span>
+                  </div>
+                </div>
+              )}
             </>
           )}
         </div>
+
+        <aside className="recon-detail-side">
+          {props.statement ? (
+            <StatementDetail
+              account={props.selectedAccount}
+              adjustments={props.selectedStatementSummary!.adjustments}
+              allocations={props.receiptAllocations}
+              detailTab={props.detailTab}
+              itemSummary={props.selectedItemSummary}
+              onAddInvoice={props.onAddInvoice}
+              onDeleteAdjustment={props.onDeleteAdjustment}
+              onDeleteAllocation={props.onDeleteAllocation}
+              onDeleteInvoice={props.onDeleteInvoice}
+              onEditInvoice={props.onEditInvoice}
+              onSaveAdjustment={props.onSaveAdjustment}
+              onSetDetailTab={props.onSetDetailTab}
+              receipts={props.receipts}
+              statement={props.statement}
+              statementId={props.statement.id}
+              statementItems={props.selectedStatementSummary!.items}
+            />
+          ) : (
+            <EmptyPanel text="新增月度对账单后，可在这里查看款号明细。" />
+          )}
+        </aside>
       </section>
     </div>
   );
@@ -1527,45 +1624,22 @@ function StatementDetail(props: {
   const styleAllocations = statementAllocations.filter((allocation) => allocation.styleAccountId === props.account?.id);
   const statementOnlyAllocations = statementAllocations.filter((allocation) => !allocation.styleAccountId);
   const visibleAdjustments = props.adjustments;
-
-  function addAdjustment() {
-    const today = getTodayString();
-    props.onSaveAdjustment({
-      id: createId("adj"),
-      customerId: props.statement.customerId,
-      statementId: props.statement.id,
-      periodMonth: props.statement.periodMonth,
-      adjustmentDate: today,
-      adjustmentType: "质量扣款",
-      direction: "decrease",
-      amount: 0,
-      relatedStyleAccountId: "",
-      reason: "",
-      note: "",
-      createdAt: today,
-      updatedAt: today,
-    });
-  }
+  const [isAdjustmentModalOpen, setIsAdjustmentModalOpen] = useState(false);
+  const [viewingAdjustment, setViewingAdjustment] = useState<StatementAdjustment | null>(null);
 
   return (
     <section className="recon-detail">
       <div className="recon-detail-head">
         <div>
-          <span>{props.account ? "款号明细" : "月度对账单"}</span>
-          <h3>{props.account?.styleNo ?? "扣款调整"}</h3>
+          <h3>款号明细</h3>
         </div>
-        {props.itemSummary && (
-          <div className="recon-detail-total">
-            <span>应收 ¥ {formatMoney(props.itemSummary.receivableAmount)}</span>
-            <span>款号未收 ¥ {formatMoney(props.itemSummary.unpaidAmount)}</span>
-          </div>
-        )}
+        {props.account && <strong className="recon-detail-style-no">{props.account.styleNo}</strong>}
       </div>
 
       <div className="recon-detail-toolbar">
         <div className="recon-tabs" role="tablist">
           {[
-            ["receivable", "款号明细"],
+            ["receivable", "明细"],
             ["adjustment", "扣款调整"],
             ["invoice", "开票记录"],
             ["payment", "收款分配"],
@@ -1577,7 +1651,7 @@ function StatementDetail(props: {
         </div>
         <div className="recon-detail-toolbar-actions">
           {props.detailTab === "adjustment" && (
-            <button className="recon-button recon-button-warning" onClick={addAdjustment} type="button">
+            <button className="recon-button recon-button-warning" onClick={() => setIsAdjustmentModalOpen(true)} type="button">
               <Plus size={16} />
               新增扣款
             </button>
@@ -1597,74 +1671,74 @@ function StatementDetail(props: {
       </div>
 
       {props.detailTab === "receivable" && props.itemSummary && props.account && (
-        <RecordTable
-          addLabel=""
-          columns={["归属月度单", "款号", "应收金额", "备注"]}
-          rows={[
-            [
-              props.itemSummary!.item.statementId,
-              props.account!.styleNo,
-              `¥ ${formatMoney(props.itemSummary!.receivableAmount)}`,
-              props.itemSummary!.item.note || "-",
-            ],
-          ]}
-        />
+        <div className="recon-record-card">
+          <table className="recon-detail-info-table">
+            <tbody>
+              <tr>
+                <th>归属月份</th>
+                <td>{props.statement.periodMonth}</td>
+              </tr>
+              <tr>
+                <th>款号</th>
+                <td>{props.account.styleNo}</td>
+              </tr>
+              <tr>
+                <th>应收金额</th>
+                <td>¥ {formatMoney(props.itemSummary.receivableAmount)}</td>
+              </tr>
+              <tr>
+                <th>备注</th>
+                <td>{props.itemSummary.item.note || "-"}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
       )}
       {props.detailTab === "receivable" && (!props.itemSummary || !props.account) && <EmptyPanel text="请选择一个款号查看明细记录。" />}
       {props.detailTab === "adjustment" && (
         <StatementAdjustmentTable
           adjustments={visibleAdjustments}
           onDelete={props.onDeleteAdjustment}
-          onSave={props.onSaveAdjustment}
+          onView={setViewingAdjustment}
           statement={props.statement}
           statementItems={props.statementItems}
         />
       )}
       {props.detailTab === "invoice" && props.account && (
-        <RecordTable
-          columns={["日期", "发票号码", "开票金额", "备注", "操作"]}
-          rows={props.account!.invoiceRecords.map((record) => [
-            record.date,
-            record.invoiceNo,
-            `¥ ${formatMoney(record.amount)}`,
-            record.remark || "-",
-            <RowActions
-              key={record.id}
-              onDelete={() => props.onDeleteInvoice(props.account!.id, record.id)}
-              onEdit={() => props.onEditInvoice(props.account!.id, record)}
-            />,
-          ])}
+        <InvoiceRecordCards
+          onDelete={(recordId) => props.onDeleteInvoice(props.account!.id, recordId)}
+          onEdit={(record) => props.onEditInvoice(props.account!.id, record)}
+          records={props.account.invoiceRecords}
         />
       )}
       {props.detailTab === "invoice" && !props.account && <EmptyPanel text="请选择一个款号录入开票记录。" />}
       {props.detailTab === "payment" && (
-        <RecordTable
-          addLabel=""
-          columns={["收款日期", "分配范围", "分配金额", "流水号", "备注", "操作"]}
-          rows={[
-            ...styleAllocations.map((allocation) => {
-              const receipt = props.receipts.find((item) => item.id === allocation.receiptId);
-              return [
-                receipt?.receiptDate ?? "-",
-                props.account?.styleNo ?? "-",
-                `¥ ${formatMoney(allocation.allocatedAmount)}`,
-                receipt?.transactionNo || "-",
-                allocation.note || "-",
-                <RowActions key={allocation.id} onDelete={() => props.onDeleteAllocation(allocation.id)} onEdit={() => undefined} />,
-              ];
-            }),
-            ...statementOnlyAllocations.map((allocation) => {
-              const receipt = props.receipts.find((item) => item.id === allocation.receiptId);
-              return [
-                receipt?.receiptDate ?? "-",
-                "整张月度对账单",
-                `¥ ${formatMoney(allocation.allocatedAmount)}`,
-                receipt?.transactionNo || "-",
-                allocation.note || "-",
-                <RowActions key={allocation.id} onDelete={() => props.onDeleteAllocation(allocation.id)} onEdit={() => undefined} />,
-              ];
-            }),
-          ]}
+        <PaymentAllocationCards
+          allocations={[...styleAllocations, ...statementOnlyAllocations]}
+          onDelete={props.onDeleteAllocation}
+          receipts={props.receipts}
+        />
+      )}
+      {isAdjustmentModalOpen && (
+        <StatementAdjustmentModal
+          onClose={() => setIsAdjustmentModalOpen(false)}
+          onSubmit={(adjustment) => {
+            props.onSaveAdjustment(adjustment);
+            setIsAdjustmentModalOpen(false);
+          }}
+          statement={props.statement}
+          statementItems={props.statementItems}
+        />
+      )}
+      {viewingAdjustment && (
+        <StatementAdjustmentViewModal
+          adjustment={viewingAdjustment}
+          onClose={() => setViewingAdjustment(null)}
+          onSave={(adjustment) => {
+            props.onSaveAdjustment(adjustment);
+            setViewingAdjustment(adjustment);
+          }}
+          statementItems={props.statementItems}
         />
       )}
     </section>
@@ -1674,81 +1748,351 @@ function StatementDetail(props: {
 function StatementAdjustmentTable(props: {
   adjustments: StatementAdjustment[];
   onDelete(adjustmentId: string): void;
-  onSave(adjustment: StatementAdjustment): void;
+  onView(adjustment: StatementAdjustment): void;
   statement: MonthlyStatement;
   statementItems: ReturnType<typeof summarizeStatement>["items"];
 }) {
   const styleOptions = props.statementItems
     .map((item) => ({ id: item.styleAccount?.id ?? item.item.styleAccountId, styleNo: item.styleAccount?.styleNo ?? "-" }))
     .filter((item) => item.id);
+  const adjustmentTotal = roundMoney(props.adjustments.reduce((sum, adjustment) => sum + getAdjustmentSignedAmount(adjustment), 0));
 
-  function updateAdjustment(adjustment: StatementAdjustment, patch: Partial<StatementAdjustment>) {
+  return (
+    <div className="recon-mini-card-list recon-adjustment-card-list">
+      {props.adjustments.map((adjustment) => {
+        const signedAmount = getAdjustmentSignedAmount(adjustment);
+        const styleNo = styleOptions.find((style) => style.id === adjustment.relatedStyleAccountId)?.styleNo ?? "整月调整";
+        return (
+          <article className="recon-mini-card" key={adjustment.id}>
+            <div className="recon-mini-card-head">
+              <div>
+                <span>关联款号</span>
+                <strong>{styleNo}</strong>
+              </div>
+              <div className="recon-row-actions">
+                <button onClick={() => props.onView(adjustment)} title="查看" type="button">
+                  <Eye size={15} />
+                </button>
+                <button onClick={() => props.onDelete(adjustment.id)} title="删除" type="button">
+                  <Trash2 size={15} />
+                </button>
+              </div>
+            </div>
+            <dl>
+              <div>
+                <dt>金额</dt>
+                <dd className={signedAmount > 0 ? "is-adjustment-positive" : signedAmount < 0 ? "is-adjustment-negative" : ""}>
+                  {signedAmount > 0 ? "+" : signedAmount < 0 ? "-" : ""} ¥ {formatMoney(Math.abs(signedAmount))}
+                </dd>
+              </div>
+              <div>
+                <dt>说明</dt>
+                <dd>{adjustment.reason || adjustment.note || "-"}</dd>
+              </div>
+            </dl>
+          </article>
+        );
+      })}
+      {props.adjustments.length === 0 && <EmptyPanel text="本月暂无扣款或调整项。" />}
+      <div className="recon-adjustment-total">
+        <span>调整合计</span>
+        <strong className={adjustmentTotal > 0 ? "is-adjustment-positive" : adjustmentTotal < 0 ? "is-adjustment-negative" : ""}>
+          {adjustmentTotal > 0 ? "+" : adjustmentTotal < 0 ? "-" : ""} ¥ {formatMoney(Math.abs(adjustmentTotal))}
+        </strong>
+      </div>
+    </div>
+  );
+}
+
+function PaymentAllocationCards(props: {
+  allocations: ReceiptAllocation[];
+  onDelete(allocationId: string): void;
+  receipts: CustomerReceipt[];
+}) {
+  return (
+    <div className="recon-allocation-card-list">
+      {props.allocations.map((allocation) => {
+        const receipt = props.receipts.find((item) => item.id === allocation.receiptId);
+        return (
+          <article className="recon-allocation-card" key={allocation.id}>
+            <div className="recon-allocation-card-head">
+              <div>
+                <span>收款日期</span>
+                <strong>{receipt?.receiptDate ?? "-"}</strong>
+              </div>
+              <button className="recon-icon-button" onClick={() => props.onDelete(allocation.id)} title="删除" type="button">
+                <Trash2 size={15} />
+              </button>
+            </div>
+            <dl>
+              <div>
+                <dt>分配金额</dt>
+                <dd>¥ {formatMoney(allocation.allocatedAmount)}</dd>
+              </div>
+              <div>
+                <dt>流水号</dt>
+                <dd>{receipt?.transactionNo || "-"}</dd>
+              </div>
+              <div>
+                <dt>备注</dt>
+                <dd>{allocation.note || "-"}</dd>
+              </div>
+            </dl>
+          </article>
+        );
+      })}
+      {props.allocations.length === 0 && <EmptyPanel text="暂无记录。" />}
+    </div>
+  );
+}
+
+function InvoiceRecordCards(props: {
+  onDelete(recordId: string): void;
+  onEdit(record: InvoiceRecord): void;
+  records: InvoiceRecord[];
+}) {
+  return (
+    <div className="recon-mini-card-list">
+      {props.records.map((record) => (
+        <article className="recon-mini-card" key={record.id}>
+          <div className="recon-mini-card-head">
+            <div>
+              <span>开票日期</span>
+              <strong>{record.date}</strong>
+            </div>
+            <div className="recon-row-actions">
+              <button onClick={() => props.onEdit(record)} title="编辑" type="button">
+                <Pencil size={15} />
+              </button>
+              <button onClick={() => props.onDelete(record.id)} title="删除" type="button">
+                <Trash2 size={15} />
+              </button>
+            </div>
+          </div>
+          <dl>
+            <div>
+              <dt>发票号码</dt>
+              <dd>{record.invoiceNo}</dd>
+            </div>
+            <div>
+              <dt>开票金额</dt>
+              <dd>¥ {formatMoney(record.amount)}</dd>
+            </div>
+            <div>
+              <dt>备注</dt>
+              <dd>{record.remark || "-"}</dd>
+            </div>
+          </dl>
+        </article>
+      ))}
+      {props.records.length === 0 && <EmptyPanel text="暂无记录。" />}
+    </div>
+  );
+}
+
+function StatementAdjustmentModal(props: {
+  onClose(): void;
+  onSubmit(adjustment: StatementAdjustment): void;
+  statement: MonthlyStatement;
+  statementItems: ReturnType<typeof summarizeStatement>["items"];
+}) {
+  const today = getTodayString();
+  const styleOptions = props.statementItems
+    .map((item) => ({ id: item.styleAccount?.id ?? item.item.styleAccountId, styleNo: item.styleAccount?.styleNo ?? "-" }))
+    .filter((item) => item.id);
+  const [direction, setDirection] = useState<AdjustmentDirection>("decrease");
+  const [relatedStyleAccountId, setRelatedStyleAccountId] = useState("");
+  const [amount, setAmount] = useState("");
+  const [reason, setReason] = useState("");
+  const [note, setNote] = useState("");
+
+  return (
+    <Modal onClose={props.onClose} title="新增扣款">
+      <form
+        className="recon-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          const adjustmentAmount = parseMoney(amount);
+          if (adjustmentAmount <= 0) {
+            window.alert("金额必须大于 0。");
+            return;
+          }
+          props.onSubmit({
+            id: createId("adj"),
+            customerId: props.statement.customerId,
+            statementId: props.statement.id,
+            periodMonth: props.statement.periodMonth,
+            adjustmentDate: today,
+            adjustmentType: direction === "increase" ? "补收" : "其他",
+            direction,
+            amount: adjustmentAmount,
+            relatedStyleAccountId,
+            reason: reason.trim(),
+            note: note.trim(),
+            createdAt: today,
+            updatedAt: today,
+          });
+        }}
+      >
+        <Field label="调整方向">
+          <AnimatedSelect
+            ariaLabel="调整方向"
+            onChange={(value) => setDirection(value as AdjustmentDirection)}
+            options={[
+              { label: "扣款 / 调减", value: "decrease" },
+              { label: "补收 / 调增", value: "increase" },
+            ]}
+            value={direction}
+          />
+        </Field>
+        <Field label="关联款号">
+          <AnimatedSelect
+            ariaLabel="关联款号"
+            onChange={setRelatedStyleAccountId}
+            options={[{ label: "整月调整", value: "" }, ...styleOptions.map((style) => ({ label: style.styleNo, value: style.id }))]}
+            value={relatedStyleAccountId}
+          />
+        </Field>
+        <Field label="金额" required>
+          <input min="0" onChange={(event) => setAmount(event.target.value)} step="0.01" type="number" value={amount} />
+        </Field>
+        <Field label="说明">
+          <input onChange={(event) => setReason(event.target.value)} placeholder="例如质量扣款、整月调整" value={reason} />
+        </Field>
+        <Field label="备注">
+          <textarea onChange={(event) => setNote(event.target.value)} value={note} />
+        </Field>
+        <ModalActions onClose={props.onClose} submitLabel="保存扣款" />
+      </form>
+    </Modal>
+  );
+}
+
+function StatementAdjustmentViewModal(props: {
+  adjustment: StatementAdjustment;
+  onClose(): void;
+  onSave(adjustment: StatementAdjustment): void;
+  statementItems: ReturnType<typeof summarizeStatement>["items"];
+}) {
+  const styleOptions = props.statementItems
+    .map((item) => ({ id: item.styleAccount?.id ?? item.item.styleAccountId, styleNo: item.styleAccount?.styleNo ?? "-" }))
+    .filter((item) => item.id);
+  const [isEditing, setIsEditing] = useState(false);
+  const [direction, setDirection] = useState<AdjustmentDirection>(props.adjustment.direction);
+  const [relatedStyleAccountId, setRelatedStyleAccountId] = useState(props.adjustment.relatedStyleAccountId ?? "");
+  const [amount, setAmount] = useState(String(props.adjustment.amount));
+  const [reason, setReason] = useState(props.adjustment.reason);
+  const [note, setNote] = useState(props.adjustment.note ?? "");
+  const signedAmount = getAdjustmentSignedAmount({
+    ...props.adjustment,
+    amount: parseMoney(amount),
+    direction,
+    relatedStyleAccountId,
+    reason,
+    note,
+  });
+  const styleNo = styleOptions.find((style) => style.id === relatedStyleAccountId)?.styleNo ?? "整月调整";
+
+  function saveAdjustment() {
+    const adjustmentAmount = parseMoney(amount);
+    if (adjustmentAmount <= 0) {
+      window.alert("金额必须大于 0。");
+      return;
+    }
     props.onSave({
-      ...adjustment,
-      ...patch,
-      amount: patch.amount === undefined ? adjustment.amount : roundMoney(patch.amount),
+      ...props.adjustment,
+      adjustmentType: direction === "increase" ? "补收" : "其他",
+      direction,
+      relatedStyleAccountId,
+      amount: adjustmentAmount,
+      reason: reason.trim(),
+      note: note.trim(),
       updatedAt: getTodayString(),
     });
+    setIsEditing(false);
   }
 
   return (
-    <div className="recon-record-card">
-      <table className="recon-table recon-table-compact adjustment-table">
-        <thead>
-          <tr>
-            <th>调整方向</th>
-            <th>关联款号</th>
-            <th>金额</th>
-            <th>说明</th>
-            <th>备注</th>
-            <th>操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          {props.adjustments.map((adjustment) => (
-            <tr key={adjustment.id}>
-              <td>
-                <AnimatedSelect
-                  ariaLabel="调整方向"
-                  onChange={(value) => updateAdjustment(adjustment, { direction: value as AdjustmentDirection })}
-                  options={adjustmentDirectionOptions.map((item) => ({ label: item.label, value: item.value }))}
-                  value={adjustment.direction}
-                />
-              </td>
-              <td>
-                <AnimatedSelect
-                  ariaLabel="关联款号"
-                  onChange={(value) => updateAdjustment(adjustment, { relatedStyleAccountId: value })}
-                  options={[{ label: "整月调整", value: "" }, ...styleOptions.map((style) => ({ label: style.styleNo, value: style.id }))]}
-                  value={adjustment.relatedStyleAccountId ?? ""}
-                />
-              </td>
-              <td>
-                <input
-                  min="0"
-                  onChange={(event) => updateAdjustment(adjustment, { amount: parseMoney(event.target.value) })}
-                  step="0.01"
-                  type="number"
-                  value={adjustment.amount}
-                />
-              </td>
-              <td>
-                <input onChange={(event) => updateAdjustment(adjustment, { reason: event.target.value })} value={adjustment.reason} />
-              </td>
-              <td>
-                <input onChange={(event) => updateAdjustment(adjustment, { note: event.target.value })} value={adjustment.note ?? ""} />
-              </td>
-              <td>
-                <button className="recon-icon-button" onClick={() => props.onDelete(adjustment.id)} title="删除" type="button">
-                  <Trash2 size={15} />
-                </button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {props.adjustments.length === 0 && <EmptyPanel text="本月暂无扣款或调整项。" />}
-    </div>
+    <Modal onClose={props.onClose} title={isEditing ? "编辑扣款" : "查看扣款"}>
+      <div className="recon-form">
+        {isEditing ? (
+          <>
+            <Field label="调整方向">
+              <AnimatedSelect
+                ariaLabel="调整方向"
+                onChange={(value) => setDirection(value as AdjustmentDirection)}
+                options={[
+                  { label: "扣款 / 调减", value: "decrease" },
+                  { label: "补收 / 调增", value: "increase" },
+                ]}
+                value={direction}
+              />
+            </Field>
+            <Field label="关联款号">
+              <AnimatedSelect
+                ariaLabel="关联款号"
+                onChange={setRelatedStyleAccountId}
+                options={[{ label: "整月调整", value: "" }, ...styleOptions.map((style) => ({ label: style.styleNo, value: style.id }))]}
+                value={relatedStyleAccountId}
+              />
+            </Field>
+            <Field label="金额" required>
+              <input min="0" onChange={(event) => setAmount(event.target.value)} step="0.01" type="number" value={amount} />
+            </Field>
+            <Field label="说明">
+              <input onChange={(event) => setReason(event.target.value)} value={reason} />
+            </Field>
+            <Field label="备注">
+              <textarea onChange={(event) => setNote(event.target.value)} value={note} />
+            </Field>
+          </>
+        ) : (
+          <table className="recon-detail-info-table">
+            <tbody>
+              <tr>
+                <th>关联款号</th>
+                <td>{styleNo}</td>
+              </tr>
+              <tr>
+                <th>金额</th>
+                <td className={signedAmount > 0 ? "is-adjustment-positive" : signedAmount < 0 ? "is-adjustment-negative" : ""}>
+                  {signedAmount > 0 ? "+" : signedAmount < 0 ? "-" : ""} ¥ {formatMoney(Math.abs(signedAmount))}
+                </td>
+              </tr>
+              <tr>
+                <th>说明</th>
+                <td>{reason || "-"}</td>
+              </tr>
+              <tr>
+                <th>备注</th>
+                <td>{note || "-"}</td>
+              </tr>
+            </tbody>
+          </table>
+        )}
+        <div className="recon-modal-actions">
+          {isEditing ? (
+            <>
+              <button className="recon-button recon-button-light" onClick={() => setIsEditing(false)} type="button">
+                取消
+              </button>
+              <button className="recon-button recon-button-primary" onClick={saveAdjustment} type="button">
+                保存
+              </button>
+            </>
+          ) : (
+            <>
+              <button className="recon-button recon-button-light" onClick={props.onClose} type="button">
+                关闭
+              </button>
+              <button className="recon-button recon-button-primary" onClick={() => setIsEditing(true)} type="button">
+                编辑
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </Modal>
   );
 }
 
@@ -2221,15 +2565,18 @@ function OverviewModule(props: { customers: Customer[]; store: Parameters<typeof
 
 function ReceiptPoolModule(props: {
   allocations: ReceiptAllocation[];
+  customerProfiles: CustomerProfile[];
   customers: Customer[];
   onAllocate(customerId: string): void;
   onImport(rows: ReceiptImportRow[], warnings: string[]): void;
+  onSaveReceipt(receipt: CustomerReceipt): void;
   receipts: CustomerReceipt[];
 }) {
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
   const [periodMonth, setPeriodMonth] = useState("");
   const [method, setMethod] = useState<PaymentMethod | "">("");
   const [keyword, setKeyword] = useState("");
+  const [editingReceipt, setEditingReceipt] = useState<CustomerReceipt | null>(null);
   const receiptPeriodOptions = Array.from(new Set(props.receipts.map((receipt) => receipt.periodMonth || receipt.receiptDate.slice(0, 7))))
     .filter(Boolean)
     .sort()
@@ -2247,6 +2594,12 @@ function ReceiptPoolModule(props: {
   const totalAmount = visibleReceipts.reduce((sum, receipt) => sum + receipt.amount, 0);
   const totalAllocated = visibleReceipts.reduce((sum, receipt) => sum + getReceiptAllocatedAmount(receipt.id, props.allocations), 0);
   const totalUnallocated = totalAmount - totalAllocated;
+
+  function getReceiptCustomerName(customerId: string) {
+    const customer = props.customers.find((item) => item.id === customerId);
+    const profile = props.customerProfiles.find((item) => item.id === customerId);
+    return profile?.shortName || profile?.fullName || customer?.name || "-";
+  }
 
   async function importReceiptFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -2280,7 +2633,7 @@ function ReceiptPoolModule(props: {
           <AnimatedSelect
             ariaLabel="客户"
             onChange={setSelectedCustomerId}
-            options={[{ label: "全部客户", value: "" }, ...props.customers.map((customer) => ({ label: customer.name, value: customer.id }))]}
+            options={[{ label: "全部客户", value: "" }, ...props.customers.map((customer) => ({ label: getReceiptCustomerName(customer.id), value: customer.id }))]}
             value={selectedCustomerId}
           />
         </label>
@@ -2339,7 +2692,7 @@ function ReceiptPoolModule(props: {
             const allocated = getReceiptAllocatedAmount(receipt.id, props.allocations);
             return (
               <tr key={receipt.id}>
-                <td>{props.customers.find((customer) => customer.id === receipt.customerId)?.name ?? "-"}</td>
+                <td>{getReceiptCustomerName(receipt.customerId)}</td>
                 <td>{receipt.receiptDate}</td>
                 <td>¥ {formatMoney(receipt.amount)}</td>
                 <td>¥ {formatMoney(allocated)}</td>
@@ -2349,9 +2702,14 @@ function ReceiptPoolModule(props: {
                 <td>{receipt.periodMonth || "-"}</td>
                 <td>{receipt.note || "-"}</td>
                 <td>
-                  <button className="recon-inline-action" onClick={() => props.onAllocate(receipt.customerId)} type="button">
-                    分配
-                  </button>
+                  <div className="recon-row-actions">
+                    <button className="recon-inline-action" onClick={() => setEditingReceipt(receipt)} type="button">
+                      编辑
+                    </button>
+                    <button className="recon-inline-action" onClick={() => props.onAllocate(receipt.customerId)} type="button">
+                      分配
+                    </button>
+                  </div>
                 </td>
               </tr>
             );
@@ -2367,7 +2725,125 @@ function ReceiptPoolModule(props: {
           </tr>
         </tfoot>
       </table>
+      {editingReceipt && (
+        <ReceiptRecordEditModal
+          allocatedAmount={getReceiptAllocatedAmount(editingReceipt.id, props.allocations)}
+          customerProfiles={props.customerProfiles}
+          customers={props.customers}
+          onClose={() => setEditingReceipt(null)}
+          onSave={(receipt) => {
+            props.onSaveReceipt(receipt);
+            setEditingReceipt(null);
+          }}
+          periodOptions={receiptPeriodOptions}
+          receipt={editingReceipt}
+        />
+      )}
     </section>
+  );
+}
+
+function ReceiptRecordEditModal(props: {
+  allocatedAmount: number;
+  customerProfiles: CustomerProfile[];
+  customers: Customer[];
+  onClose(): void;
+  onSave(receipt: CustomerReceipt): void;
+  periodOptions: string[];
+  receipt: CustomerReceipt;
+}) {
+  const [customerId, setCustomerId] = useState(props.receipt.customerId);
+  const [receiptDate, setReceiptDate] = useState(props.receipt.receiptDate);
+  const [amount, setAmount] = useState(props.receipt.amount.toFixed(2));
+  const [method, setMethod] = useState<PaymentMethod>(props.receipt.method);
+  const [transactionNo, setTransactionNo] = useState(props.receipt.transactionNo ?? "");
+  const [periodMonth, setPeriodMonth] = useState(props.receipt.periodMonth ?? "");
+  const [note, setNote] = useState(props.receipt.note ?? "");
+  const [error, setError] = useState("");
+  const periodOptions = Array.from(new Set([props.receipt.periodMonth, ...props.periodOptions].filter(Boolean) as string[]));
+  const customerOptions = props.customers.map((customer) => {
+    const profile = props.customerProfiles.find((item) => item.id === customer.id);
+    return {
+      label: profile?.shortName || profile?.fullName || customer.name,
+      value: customer.id,
+    };
+  });
+
+  return (
+    <Modal onClose={props.onClose} title="编辑收款记录">
+      <form
+        className="recon-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          const parsedAmount = roundMoney(parseMoney(amount));
+          if (!/^\d{4}-\d{2}-\d{2}$/.test(receiptDate)) {
+            setError("收款日期必须使用 YYYY-MM-DD 格式。");
+            return;
+          }
+          if (parsedAmount <= 0) {
+            setError("收款金额必须大于 0。");
+            return;
+          }
+          if (parsedAmount < props.allocatedAmount) {
+            setError(`收款金额不能小于已分配金额 ¥ ${formatMoney(props.allocatedAmount)}。`);
+            return;
+          }
+          if (customerId !== props.receipt.customerId && props.allocatedAmount > 0) {
+            setError("这笔收款已有分配记录，请先删除相关分配后再更换客户。");
+            return;
+          }
+          props.onSave({
+            ...props.receipt,
+            customerId,
+            receiptDate,
+            amount: parsedAmount,
+            method,
+            transactionNo: transactionNo.trim(),
+            periodMonth: periodMonth.trim(),
+            note: note.trim(),
+          });
+        }}
+      >
+        <>
+          <Field label="客户" required>
+            <AnimatedSelect ariaLabel="客户" onChange={setCustomerId} options={customerOptions} value={customerId} />
+          </Field>
+          <Field label="收款日期" required>
+            <input onChange={(event) => setReceiptDate(event.target.value)} type="date" value={receiptDate} />
+          </Field>
+          <Field label="收款金额" required>
+            <input min="0" onChange={(event) => setAmount(event.target.value)} step="0.01" type="number" value={amount} />
+          </Field>
+          <Field label="收款方式">
+            <AnimatedSelect ariaLabel="收款方式" onChange={(value) => setMethod(value as PaymentMethod)} options={toSelectOptions(paymentMethods)} value={method} />
+          </Field>
+          <Field label="流水号 / 承兑编号">
+            <input onChange={(event) => setTransactionNo(event.target.value)} value={transactionNo} />
+          </Field>
+          <Field label="归属账期">
+            <input
+              list="receipt-edit-periods"
+              onChange={(event) => setPeriodMonth(event.target.value)}
+              placeholder="例如 2026-07"
+              value={periodMonth}
+            />
+          </Field>
+          <datalist id="receipt-edit-periods">
+            {periodOptions.map((period) => (
+              <option key={period} value={period} />
+            ))}
+          </datalist>
+          <Field label="备注">
+            <textarea onChange={(event) => setNote(event.target.value)} value={note} />
+          </Field>
+          <div className="receipt-edit-summary">
+            已分配 ¥ {formatMoney(props.allocatedAmount)} / 未分配 ¥ {formatMoney(Math.max(parseMoney(amount) - props.allocatedAmount, 0))}
+          </div>
+          {error && <div className="receipt-pool__error">{error}</div>}
+          <ModalActions onClose={props.onClose} submitLabel="保存收款" />
+        </>
+      </form>
+    </Modal>
   );
 }
 
@@ -2444,7 +2920,7 @@ function SettingsModule() {
   );
 }
 
-function InvoiceRecordsModule(props: { customers: Customer[]; styleAccounts: StyleAccount[] }) {
+function InvoiceRecordsModule(props: { customers: Customer[]; onImport(rows: InvoiceImportRow[], warnings: string[]): void; styleAccounts: StyleAccount[] }) {
   const [customerId, setCustomerId] = useState("");
   const [periodMonth, setPeriodMonth] = useState("");
   const [styleKeyword, setStyleKeyword] = useState("");
@@ -2468,6 +2944,19 @@ function InvoiceRecordsModule(props: { customers: Customer[]; styleAccounts: Sty
   });
   const totalAmount = filteredRows.reduce((sum, row) => sum + row.record.amount, 0);
 
+  async function importInvoiceFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+
+    try {
+      const result = await readInvoiceImportFile(file);
+      props.onImport(result.rows, result.warnings);
+    } catch (error) {
+      window.alert(error instanceof Error ? error.message : "开票记录导入失败，请检查 Excel 文件。");
+    }
+  }
+
   return (
     <section className="recon-simple-panel records-fill-page invoice-records-page">
       <div className="recon-panel-head">
@@ -2475,6 +2964,11 @@ function InvoiceRecordsModule(props: { customers: Customer[]; styleAccounts: Sty
           <span>全部开票记录</span>
           <strong>{filteredRows.length} 条记录</strong>
         </div>
+        <label className="recon-button recon-button-primary payment-import-trigger">
+          <Upload size={16} />
+          导入开票
+          <input accept=".xlsx,.csv" onChange={importInvoiceFile} type="file" />
+        </label>
       </div>
       <div className="module-filter-grid">
         <label>
