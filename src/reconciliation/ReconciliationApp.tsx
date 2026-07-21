@@ -1126,7 +1126,6 @@ export function ReconciliationApp() {
       <main className="recon-main">
         <header className="recon-topbar">
           <div>
-            <span className="recon-kicker">财务 / 月度客户对账</span>
             <h1>{getModuleTitle(activeModule)}</h1>
           </div>
           <div className="recon-userbar">
@@ -1484,6 +1483,16 @@ function CustomerStatementPanel(props: {
                   <Eye size={16} />
                   预览对账单
                 </button>
+                {props.statement && (
+                  <label className="recon-statement-status-select">
+                    <AnimatedSelect
+                      ariaLabel="月度对账单状态"
+                      onChange={(value) => props.onStatementStatusChange(value as StatementStatus)}
+                      options={toSelectOptions(statementStatusOptions)}
+                      value={props.statement.status}
+                    />
+                  </label>
+                )}
               </div>
               <div className="recon-statement-actions-right">
                 <button className="recon-button recon-button-light" onClick={props.onOpenReceiptPool} type="button">
@@ -1560,12 +1569,11 @@ function CustomerStatementPanel(props: {
                 </table>
                 {props.filteredItems.length === 0 && <EmptyPanel text="当前月度对账单没有符合条件的款号。" />}
               </div>
-              {props.selectedItemSummary && (
+              {props.selectedStatementSummary && (
                 <div className="recon-account-footer">
-                  <span>当前款号：{props.selectedItemSummary.styleAccount?.styleNo ?? "-"}</span>
                   <div className="recon-detail-total">
-                    <span>应收 ¥ {formatMoney(props.selectedItemSummary.receivableAmount)}</span>
-                    <span>款号未收 ¥ {formatMoney(props.selectedItemSummary.unpaidAmount)}</span>
+                    <span>本月款号应收 ¥ {formatMoney(sumMoney(props.selectedStatementSummary.items.map((item) => item.receivableAmount)))}</span>
+                    <span>本月款号未收 ¥ {formatMoney(sumMoney(props.selectedStatementSummary.items.map((item) => item.unpaidAmount)))}</span>
                   </div>
                 </div>
               )}
@@ -1718,6 +1726,13 @@ function StatementDetail(props: {
           onDelete={props.onDeleteAllocation}
           receipts={props.receipts}
         />
+      )}
+      {props.itemSummary && (
+        <div className="recon-detail-footer">
+          <div className="recon-detail-total">
+            <span>款号未收 ¥ {formatMoney(props.itemSummary.unpaidAmount)}</span>
+          </div>
+        </div>
       )}
       {isAdjustmentModalOpen && (
         <StatementAdjustmentModal
@@ -2151,6 +2166,8 @@ function CustomerProfilesModule(props: {
     props.profiles.find((profile) => profile.id === props.selectedCustomerId) ?? createBlankCustomerProfile(),
   );
   const [isNew, setIsNew] = useState(props.profiles.length === 0);
+  const [isEditing, setIsEditing] = useState(props.profiles.length === 0);
+  const canEdit = isNew || isEditing;
 
   const visibleProfiles = props.profiles.filter((profile) => {
     const keyword = search.trim().toLowerCase();
@@ -2165,15 +2182,18 @@ function CustomerProfilesModule(props: {
   function selectProfile(profile: CustomerProfile) {
     setEditingProfile(profile);
     setIsNew(false);
+    setIsEditing(false);
     props.onSelect(profile.id);
   }
 
   function startNewProfile() {
     setEditingProfile(createBlankCustomerProfile());
     setIsNew(true);
+    setIsEditing(true);
   }
 
   function updateProfile(patch: Partial<CustomerProfile>) {
+    if (!canEdit) return;
     setEditingProfile((current) => ({ ...current, ...patch }));
   }
 
@@ -2195,6 +2215,7 @@ function CustomerProfilesModule(props: {
       contactName: editingProfile.contactName.trim(),
     });
     setIsNew(false);
+    setIsEditing(false);
   }
 
   async function importProfiles(event: ChangeEvent<HTMLInputElement>) {
@@ -2259,22 +2280,16 @@ function CustomerProfilesModule(props: {
             </div>
           </div>
           <div className="customer-profile-list__items">
-            {visibleProfiles.map((profile) => {
-              const summary = summarizeCustomer({ id: profile.id, name: profile.shortName, createdAt: profile.createdAt, updatedAt: profile.updatedAt }, props.store);
-              return (
-                <button
-                  className={!isNew && editingProfile.id === profile.id ? "is-selected" : ""}
-                  key={profile.id}
-                  onClick={() => selectProfile(profile)}
-                  type="button"
-                >
-                  <strong>{profile.shortName}</strong>
-                  <span>{profile.fullName}</span>
-                  <span>{profile.contactName || "未填写联系人"} · {profile.status}</span>
-                  <em>未收 ¥ {formatMoney(summary.closingBalanceTotal)}</em>
-                </button>
-              );
-            })}
+            {visibleProfiles.map((profile) => (
+              <button
+                className={!isNew && editingProfile.id === profile.id ? "is-selected" : ""}
+                key={profile.id}
+                onClick={() => selectProfile(profile)}
+                type="button"
+              >
+                <strong>{profile.shortName}</strong>
+              </button>
+            ))}
           </div>
         </aside>
 
@@ -2285,8 +2300,12 @@ function CustomerProfilesModule(props: {
               <h2>{editingProfile.shortName || "未命名客户"}</h2>
             </div>
           <div className="recon-topbar-actions">
-              <button className="recon-button recon-button-primary" onClick={saveProfile} type="button">
-                保存
+              <button
+                className="recon-button recon-button-primary"
+                onClick={canEdit ? saveProfile : () => setIsEditing(true)}
+                type="button"
+              >
+                {canEdit ? "保存" : "编辑"}
               </button>
               <button
                 className="recon-button recon-button-light"
@@ -2299,66 +2318,68 @@ function CustomerProfilesModule(props: {
             </div>
           </div>
 
-          <div className="customer-profile-form">
-            <ProfileSection title="基础信息">
-              <ProfileInput label="客户简称" onChange={(value) => updateProfile({ shortName: value })} required value={editingProfile.shortName} />
-              <ProfileInput label="客户全称" onChange={(value) => updateProfile({ fullName: value })} required value={editingProfile.fullName} />
-              <ProfileSelect<CustomerType>
-                label="客户类型"
-                onChange={(value) => updateProfile({ customerType: value })}
-                options={customerTypeOptions}
-                value={editingProfile.customerType}
-              />
-              <ProfileSelect<CustomerProfileStatus>
-                label="客户状态"
-                onChange={(value) => updateProfile({ status: value })}
-                options={customerProfileStatusOptions}
-                value={editingProfile.status}
-              />
-              <ProfileTextarea label="备注" onChange={(value) => updateProfile({ note: value })} value={editingProfile.note} />
-            </ProfileSection>
-
-            <ProfileSection title="联系人信息">
-              <ProfileInput label="联系人" onChange={(value) => updateProfile({ contactName: value })} value={editingProfile.contactName} />
-              <ProfileInput label="手机号" onChange={(value) => updateProfile({ mobile: value })} value={editingProfile.mobile} />
-              <ProfileInput label="电话" onChange={(value) => updateProfile({ phone: value })} value={editingProfile.phone} />
-              <ProfileInput label="微信" onChange={(value) => updateProfile({ wechat: value })} value={editingProfile.wechat} />
-              <ProfileInput label="邮箱" onChange={(value) => updateProfile({ email: value })} value={editingProfile.email} />
-            </ProfileSection>
-
-            <ProfileSection title="开票信息">
-              <ProfileInput label="开票抬头" onChange={(value) => updateProfile({ invoiceTitle: value })} value={editingProfile.invoiceTitle} />
-              <ProfileInput label="纳税人识别号" onChange={(value) => updateProfile({ taxNumber: value })} value={editingProfile.taxNumber} />
-              <ProfileInput label="开票地址" onChange={(value) => updateProfile({ invoiceAddress: value })} value={editingProfile.invoiceAddress} />
-              <ProfileInput label="开票电话" onChange={(value) => updateProfile({ invoicePhone: value })} value={editingProfile.invoicePhone} />
-              <ProfileInput label="开户银行" onChange={(value) => updateProfile({ bankName: value })} value={editingProfile.bankName} />
-              <ProfileInput label="银行账号" onChange={(value) => updateProfile({ bankAccount: value })} value={editingProfile.bankAccount} />
-            </ProfileSection>
-
-            <ProfileSection title="对账信息">
-              <ProfileInput label="默认账期" onChange={(value) => updateProfile({ defaultPaymentTerm: value })} value={editingProfile.defaultPaymentTerm} />
-              <ProfileInput label="默认对账日" onChange={(value) => updateProfile({ statementDay: value })} value={editingProfile.statementDay} />
-              <ProfileInput label="默认付款日" onChange={(value) => updateProfile({ paymentDay: value })} value={editingProfile.paymentDay} />
-              <ProfileInput label="币种" onChange={(value) => updateProfile({ currency: value })} value={editingProfile.currency} />
-              <label className="customer-profile-toggle">
-                <span>是否需要发票后付款</span>
-                <AnimatedSelect
-                  ariaLabel="是否需要发票后付款"
-                  onChange={(value) => updateProfile({ needInvoiceBeforePayment: value === "true" })}
-                  options={[
-                    { label: "否", value: "false" },
-                    { label: "是", value: "true" },
-                  ]}
-                  value={String(editingProfile.needInvoiceBeforePayment)}
+          <fieldset className="customer-profile-edit-fields" disabled={!canEdit}>
+            <div className="customer-profile-form">
+              <ProfileSection title="基础信息">
+                <ProfileInput label="客户简称" onChange={(value) => updateProfile({ shortName: value })} required value={editingProfile.shortName} />
+                <ProfileInput label="客户全称" onChange={(value) => updateProfile({ fullName: value })} required value={editingProfile.fullName} />
+                <ProfileSelect<CustomerType>
+                  label="客户类型"
+                  onChange={(value) => updateProfile({ customerType: value })}
+                  options={customerTypeOptions}
+                  value={editingProfile.customerType}
                 />
-              </label>
-            </ProfileSection>
+                <ProfileSelect<CustomerProfileStatus>
+                  label="客户状态"
+                  onChange={(value) => updateProfile({ status: value })}
+                  options={customerProfileStatusOptions}
+                  value={editingProfile.status}
+                />
+                <ProfileTextarea label="备注" onChange={(value) => updateProfile({ note: value })} value={editingProfile.note} />
+              </ProfileSection>
 
-            <ProfileSection title="地址信息">
-              <ProfileTextarea label="收货地址" onChange={(value) => updateProfile({ shippingAddress: value })} value={editingProfile.shippingAddress} />
-              <ProfileTextarea label="寄票地址" onChange={(value) => updateProfile({ invoiceMailingAddress: value })} value={editingProfile.invoiceMailingAddress} />
-            </ProfileSection>
-          </div>
+              <ProfileSection title="联系人信息">
+                <ProfileInput label="联系人" onChange={(value) => updateProfile({ contactName: value })} value={editingProfile.contactName} />
+                <ProfileInput label="手机号" onChange={(value) => updateProfile({ mobile: value })} value={editingProfile.mobile} />
+                <ProfileInput label="电话" onChange={(value) => updateProfile({ phone: value })} value={editingProfile.phone} />
+                <ProfileInput label="微信" onChange={(value) => updateProfile({ wechat: value })} value={editingProfile.wechat} />
+                <ProfileInput label="邮箱" onChange={(value) => updateProfile({ email: value })} value={editingProfile.email} />
+              </ProfileSection>
+
+              <ProfileSection title="开票信息">
+                <ProfileInput label="开票抬头" onChange={(value) => updateProfile({ invoiceTitle: value })} value={editingProfile.invoiceTitle} />
+                <ProfileInput label="纳税人识别号" onChange={(value) => updateProfile({ taxNumber: value })} value={editingProfile.taxNumber} />
+                <ProfileInput label="开票地址" onChange={(value) => updateProfile({ invoiceAddress: value })} value={editingProfile.invoiceAddress} />
+                <ProfileInput label="开票电话" onChange={(value) => updateProfile({ invoicePhone: value })} value={editingProfile.invoicePhone} />
+                <ProfileInput label="开户银行" onChange={(value) => updateProfile({ bankName: value })} value={editingProfile.bankName} />
+                <ProfileInput label="银行账号" onChange={(value) => updateProfile({ bankAccount: value })} value={editingProfile.bankAccount} />
+              </ProfileSection>
+
+              <ProfileSection title="对账信息">
+                <ProfileInput label="默认账期" onChange={(value) => updateProfile({ defaultPaymentTerm: value })} value={editingProfile.defaultPaymentTerm} />
+                <ProfileInput label="默认对账日" onChange={(value) => updateProfile({ statementDay: value })} value={editingProfile.statementDay} />
+                <ProfileInput label="默认付款日" onChange={(value) => updateProfile({ paymentDay: value })} value={editingProfile.paymentDay} />
+                <ProfileInput label="币种" onChange={(value) => updateProfile({ currency: value })} value={editingProfile.currency} />
+                <label className="customer-profile-toggle">
+                  <span>是否需要发票后付款</span>
+                  <AnimatedSelect
+                    ariaLabel="是否需要发票后付款"
+                    onChange={(value) => updateProfile({ needInvoiceBeforePayment: value === "true" })}
+                    options={[
+                      { label: "否", value: "false" },
+                      { label: "是", value: "true" },
+                    ]}
+                    value={String(editingProfile.needInvoiceBeforePayment)}
+                  />
+                </label>
+              </ProfileSection>
+
+              <ProfileSection title="地址信息">
+                <ProfileTextarea label="收货地址" onChange={(value) => updateProfile({ shippingAddress: value })} value={editingProfile.shippingAddress} />
+                <ProfileTextarea label="寄票地址" onChange={(value) => updateProfile({ invoiceMailingAddress: value })} value={editingProfile.invoiceMailingAddress} />
+              </ProfileSection>
+            </div>
+          </fieldset>
         </div>
       </section>
     </div>
@@ -2465,6 +2486,7 @@ function OverviewModule(props: { customers: Customer[]; store: Parameters<typeof
     paidTotal: sumMoney(statementSummaries.map((item) => item.currentReceived)),
     unpaidAmount: sumMoney(statementSummaries.map((item) => item.closingBalance)),
   };
+  const overviewHeaderTitle = customerId ? props.customers.find((customer) => customer.id === customerId)?.name ?? "当前客户" : "全部客户";
 
   return (
     <div className="recon-workspace">
@@ -2477,8 +2499,7 @@ function OverviewModule(props: { customers: Customer[]; store: Parameters<typeof
       <section className="recon-simple-panel records-fill-page overview-records-page">
         <div className="recon-panel-head">
           <div>
-            <span>客户月度余额总览</span>
-            <strong>{statementSummaries.length} 张月度对账单</strong>
+            <strong>{overviewHeaderTitle}</strong>
           </div>
         </div>
         <div className="module-filter-grid">
@@ -2601,6 +2622,8 @@ function ReceiptPoolModule(props: {
     return profile?.shortName || profile?.fullName || customer?.name || "-";
   }
 
+  const receiptHeaderTitle = selectedCustomerId ? getReceiptCustomerName(selectedCustomerId) : "全部客户";
+
   async function importReceiptFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     event.target.value = "";
@@ -2618,8 +2641,7 @@ function ReceiptPoolModule(props: {
     <section className="recon-simple-panel records-fill-page receipt-records-page">
       <div className="recon-panel-head">
         <div>
-          <span>全部收款记录</span>
-          <strong>{visibleReceipts.length} 笔收款</strong>
+          <strong>{receiptHeaderTitle}</strong>
         </div>
         <label className="recon-button recon-button-primary payment-import-trigger">
           <Upload size={16} />
@@ -2943,6 +2965,7 @@ function InvoiceRecordsModule(props: { customers: Customer[]; onImport(rows: Inv
     return matchesCustomer && matchesPeriod && matchesStyle && matchesInvoice;
   });
   const totalAmount = filteredRows.reduce((sum, row) => sum + row.record.amount, 0);
+  const invoiceHeaderTitle = customerId ? props.customers.find((customer) => customer.id === customerId)?.name ?? "当前客户" : "全部客户";
 
   async function importInvoiceFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -2961,8 +2984,7 @@ function InvoiceRecordsModule(props: { customers: Customer[]; onImport(rows: Inv
     <section className="recon-simple-panel records-fill-page invoice-records-page">
       <div className="recon-panel-head">
         <div>
-          <span>全部开票记录</span>
-          <strong>{filteredRows.length} 条记录</strong>
+          <strong>{invoiceHeaderTitle}</strong>
         </div>
         <label className="recon-button recon-button-primary payment-import-trigger">
           <Upload size={16} />
