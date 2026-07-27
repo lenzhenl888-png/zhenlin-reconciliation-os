@@ -9,6 +9,7 @@ import {
   FileText,
   Landmark,
   LayoutDashboard,
+  Menu,
   Pencil,
   Plus,
   Printer,
@@ -122,6 +123,7 @@ export function ReconciliationApp() {
   const [store, setStore] = useState(() => reconciliationRepository.load());
   const periods = useMemo(() => getAvailablePeriods(store), [store]);
   const [activeModule, setActiveModule] = useState<ActiveModule>("customer");
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [selectedCustomerId, setSelectedCustomerId] = useState(store.customers[0]?.id ?? "");
   const [selectedPeriod, setSelectedPeriod] = useState(periods[0] ?? getCurrentPeriod());
   const [selectedItemId, setSelectedItemId] = useState("");
@@ -135,7 +137,7 @@ export function ReconciliationApp() {
   const cloudReadyRef = useRef(false);
   const latestSaveIdRef = useRef(0);
   const isLocalDevelopment = ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
-  const currentUserLabel = isLocalDevelopment ? "本地开发" : auth.user?.displayName || auth.user?.username;
+  const currentUserLabel = isLocalDevelopment ? "admin" : auth.user?.displayName || auth.user?.username;
 
   useEffect(() => {
     reconciliationRepository.save(store);
@@ -1084,7 +1086,7 @@ export function ReconciliationApp() {
 
   return (
     <ClickSpark duration={420} sparkColor="#1f7a8c" sparkCount={8} sparkRadius={18} sparkSize={11}>
-      <div className="recon-shell">
+      <div className={`recon-shell ${sidebarCollapsed ? "is-sidebar-collapsed" : ""}`}>
       <aside className="recon-sidebar">
         <Particles
           className="recon-sidebar-particles"
@@ -1112,6 +1114,7 @@ export function ReconciliationApp() {
                 className={activeModule === item.id ? "is-active" : ""}
                 key={item.id}
                 onClick={() => setActiveModule(item.id)}
+                title={item.label}
                 type="button"
               >
                 <Icon size={18} />
@@ -1125,7 +1128,15 @@ export function ReconciliationApp() {
 
       <main className="recon-main">
         <header className="recon-topbar">
-          <div>
+          <div className="recon-topbar-title">
+            <button
+              aria-label={sidebarCollapsed ? "展开左侧导航" : "收起左侧导航"}
+              className="recon-sidebar-toggle"
+              onClick={() => setSidebarCollapsed((collapsed) => !collapsed)}
+              type="button"
+            >
+              <Menu size={22} />
+            </button>
             <h1>{getModuleTitle(activeModule)}</h1>
           </div>
           <div className="recon-userbar">
@@ -1436,7 +1447,6 @@ function CustomerStatementPanel(props: {
                 type="button"
               >
                 <strong>{summary.customerName}</strong>
-                <span>{summary.statementCount} 张月度对账单 / {summary.styleCount} 个款号</span>
                 <em>总未收 ¥ {formatMoney(summary.closingBalanceTotal)}</em>
               </button>
             ))}
@@ -1778,11 +1788,23 @@ function StatementAdjustmentTable(props: {
         const signedAmount = getAdjustmentSignedAmount(adjustment);
         const styleNo = styleOptions.find((style) => style.id === adjustment.relatedStyleAccountId)?.styleNo ?? "整月调整";
         return (
-          <article className="recon-mini-card" key={adjustment.id}>
+          <article className="recon-mini-card recon-adjustment-card" key={adjustment.id}>
             <div className="recon-mini-card-head">
-              <div>
-                <span>关联款号</span>
-                <strong>{styleNo}</strong>
+              <div className="recon-adjustment-card-main">
+                <div>
+                  <span>关联款号</span>
+                  <strong>{styleNo}</strong>
+                </div>
+                <div>
+                  <span>金额</span>
+                  <strong className={signedAmount > 0 ? "is-adjustment-positive" : signedAmount < 0 ? "is-adjustment-negative" : ""}>
+                    {signedAmount > 0 ? "+" : signedAmount < 0 ? "-" : ""} ¥ {formatMoney(Math.abs(signedAmount))}
+                  </strong>
+                </div>
+                <div>
+                  <span>说明</span>
+                  <strong>{adjustment.reason || adjustment.note || "-"}</strong>
+                </div>
               </div>
               <div className="recon-row-actions">
                 <button onClick={() => props.onView(adjustment)} title="查看" type="button">
@@ -1793,18 +1815,6 @@ function StatementAdjustmentTable(props: {
                 </button>
               </div>
             </div>
-            <dl>
-              <div>
-                <dt>金额</dt>
-                <dd className={signedAmount > 0 ? "is-adjustment-positive" : signedAmount < 0 ? "is-adjustment-negative" : ""}>
-                  {signedAmount > 0 ? "+" : signedAmount < 0 ? "-" : ""} ¥ {formatMoney(Math.abs(signedAmount))}
-                </dd>
-              </div>
-              <div>
-                <dt>说明</dt>
-                <dd>{adjustment.reason || adjustment.note || "-"}</dd>
-              </div>
-            </dl>
           </article>
         );
       })}

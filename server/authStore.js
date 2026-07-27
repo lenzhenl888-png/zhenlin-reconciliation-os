@@ -10,7 +10,9 @@ function resolveDbPath() {
 
 const dbPath = resolveDbPath();
 const dataDir = path.dirname(dbPath);
-const defaultAdminUsername = "ZLFZ250721";
+const isProduction = process.env.NODE_ENV === "production";
+const defaultAdminUsername = process.env.DEFAULT_ADMIN_USERNAME || (isProduction ? "ZLFZ250721" : "admin");
+const defaultAdminPassword = process.env.DEFAULT_ADMIN_PASSWORD || (isProduction ? "Admin@123456" : "admin");
 
 function now() {
   return new Date().toISOString();
@@ -64,7 +66,7 @@ export function ensureDefaultAdmin() {
   db.users.push({
     id: crypto.randomUUID(),
     username: defaultAdminUsername,
-    passwordHash: hashPassword("Admin@123456"),
+    passwordHash: hashPassword(defaultAdminPassword),
     displayName: "管理员",
     role: "admin",
     status: "active",
@@ -75,7 +77,7 @@ export function ensureDefaultAdmin() {
     updatedAt: timestamp,
   });
   writeDb(db);
-  console.log(`[auth] Created default admin: ${defaultAdminUsername} / Admin@123456`);
+  console.log(`[auth] Created default admin: ${defaultAdminUsername}`);
 }
 
 export function publicUser(user) {
