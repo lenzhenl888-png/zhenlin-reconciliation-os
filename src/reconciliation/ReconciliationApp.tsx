@@ -288,7 +288,12 @@ export function ReconciliationApp() {
 
   function upsertCustomerProfile(profile: CustomerProfile) {
     const today = getTodayString();
-    const normalizedProfile = { ...profile, updatedAt: today };
+    const normalizedProfile = {
+      ...profile,
+      startupPeriodMonth: profile.startupPeriodMonth?.trim() ?? "",
+      startupOpeningBalance: roundMoney(profile.startupOpeningBalance ?? 0),
+      updatedAt: today,
+    };
     const customer: Customer = {
       id: normalizedProfile.id,
       name: normalizedProfile.shortName || normalizedProfile.fullName,
@@ -301,14 +306,33 @@ export function ReconciliationApp() {
     updateStore((currentStore) => {
       const exists = currentStore.customerProfiles.some((item) => item.id === normalizedProfile.id);
       const customerExists = currentStore.customers.some((item) => item.id === normalizedProfile.id);
+      const customerStatements = currentStore.monthlyStatements
+        .filter((statement) => statement.customerId === normalizedProfile.id)
+        .sort((left, right) => left.periodMonth.localeCompare(right.periodMonth));
+      const firstStatement = customerStatements[0];
+      const profileWithStartup = {
+        ...normalizedProfile,
+        startupPeriodMonth: firstStatement?.periodMonth ?? normalizedProfile.startupPeriodMonth,
+      };
       return {
         ...currentStore,
         customerProfiles: exists
-          ? currentStore.customerProfiles.map((item) => (item.id === normalizedProfile.id ? normalizedProfile : item))
-          : [normalizedProfile, ...currentStore.customerProfiles],
+          ? currentStore.customerProfiles.map((item) => (item.id === normalizedProfile.id ? profileWithStartup : item))
+          : [profileWithStartup, ...currentStore.customerProfiles],
         customers: customerExists
           ? currentStore.customers.map((item) => (item.id === customer.id ? { ...item, ...customer } : item))
           : [customer, ...currentStore.customers],
+        monthlyStatements: firstStatement
+          ? currentStore.monthlyStatements.map((statement) =>
+              statement.id === firstStatement.id
+                ? {
+                    ...statement,
+                    openingBalance: profileWithStartup.startupOpeningBalance ?? 0,
+                    updatedAt: today,
+                  }
+                : statement,
+            )
+          : currentStore.monthlyStatements,
       };
     });
     setSelectedCustomerId(normalizedProfile.id);
@@ -410,6 +434,8 @@ export function ReconciliationApp() {
           bankName: textField("bankName") as string,
           bankAccount: textField("bankAccount") as string,
           defaultPaymentTerm: textField("defaultPaymentTerm") as string,
+          startupPeriodMonth: textField("startupPeriodMonth") as string,
+          startupOpeningBalance: fields.startupOpeningBalance ?? base.startupOpeningBalance ?? 0,
           statementDay: textField("statementDay") as string,
           paymentDay: textField("paymentDay") as string,
           currency: textField("currency") as string,
@@ -469,6 +495,8 @@ export function ReconciliationApp() {
           invoicePhone: "",
           bankName: "",
           bankAccount: "",
+          startupPeriodMonth: "",
+          startupOpeningBalance: 0,
           defaultPaymentTerm: "月结",
           statementDay: "每月25日",
           paymentDay: "次月10日",
@@ -784,7 +812,6 @@ export function ReconciliationApp() {
           amount: roundMoney(row.amount),
           method: row.method,
           transactionNo: row.transactionNo,
-          periodMonth: row.receiptDate.slice(0, 7),
           note: row.note,
           createdAt: today,
           updatedAt: today,
@@ -923,11 +950,11 @@ export function ReconciliationApp() {
     if (!selectedCustomer || !selectedStatementSummary) return;
     const statement = selectedStatementSummary.statement;
     const statementDate = formatDate(new Date());
-    const openingBalance = selectedStatementSummary.realtimeOpeningBalance;
+    const openingBalance = selectedStatementSummary.openingBalance;
     const currentTotal = selectedStatementSummary.styleReceivableTotal;
     const adjustmentNetTotal = roundMoney(selectedStatementSummary.increaseAdjustmentTotal - selectedStatementSummary.decreaseAdjustmentTotal);
     const deductionTotal = roundMoney(-selectedStatementSummary.decreaseAdjustmentTotal);
-    const grandTotal = selectedStatementSummary.grandTotal;
+    const grandTotal = roundMoney(openingBalance + selectedStatementSummary.adjustedReceivable);
     const getAdjustmentStyleNo = (styleAccountId?: string) =>
       selectedStatementSummary.items.find((item) => item.styleAccount?.id === styleAccountId || item.item.styleAccountId === styleAccountId)?.styleAccount
         ?.styleNo ??
@@ -1299,13 +1326,6 @@ export function ReconciliationApp() {
         <ReceiptPoolModal
           allocations={store.receiptAllocations}
           customer={store.customers.find((item) => item.id === modal.customerId)}
-          periods={Array.from(
-            new Set(
-              store.monthlyStatements
-                .filter((statement) => statement.customerId === modal.customerId)
-                .map((statement) => statement.periodMonth),
-            ),
-          )}
           receipts={store.customerReceipts.filter((receipt) => receipt.customerId === modal.customerId)}
           onClose={() => setModal(null)}
           onSave={(receipts, deletedReceiptIds) => {
@@ -1381,8 +1401,6 @@ function CustomerStatementPanel(props: {
   statement?: MonthlyStatement;
   summary: ReturnType<typeof summarizeAll>;
 }) {
-  const openingBalanceDifference = props.selectedStatementSummary?.openingBalanceDifference ?? 0;
-  const hasOpeningBalanceDifference = Math.abs(openingBalanceDifference) >= 0.01;
   const [customerSearchText, setCustomerSearchText] = useState("");
   const customerButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const matchedCustomerId = useMemo(() => {
@@ -1400,8 +1418,7 @@ function CustomerStatementPanel(props: {
 
   return (
     <div className="recon-workspace">
-      <section className="recon-stat-grid recon-stat-grid-seven" aria-label="月度统计卡片">
-        <StatCard label="账单期初余额" value={props.selectedStatementSummary?.openingBalance ?? 0} icon={Banknote} />
+      <section className="recon-stat-grid recon-stat-grid-six" aria-label="月度统计卡片">
         <StatCard label="实时期初余额" value={props.selectedStatementSummary?.realtimeOpeningBalance ?? 0} icon={RotateCcw} />
         <StatCard label="本月款号应收" value={props.selectedStatementSummary?.styleReceivableTotal ?? 0} icon={BarChart3} />
         <StatCard
@@ -2173,7 +2190,7 @@ function CustomerProfilesModule(props: {
   const [typeFilter, setTypeFilter] = useState<CustomerType | "">("");
   const [statusFilter, setStatusFilter] = useState<CustomerProfileStatus | "">("");
   const [editingProfile, setEditingProfile] = useState<CustomerProfile>(() =>
-    props.profiles.find((profile) => profile.id === props.selectedCustomerId) ?? createBlankCustomerProfile(),
+    withCustomerProfileDefaults(props.profiles.find((profile) => profile.id === props.selectedCustomerId) ?? createBlankCustomerProfile()),
   );
   const [isNew, setIsNew] = useState(props.profiles.length === 0);
   const [isEditing, setIsEditing] = useState(props.profiles.length === 0);
@@ -2190,7 +2207,7 @@ function CustomerProfilesModule(props: {
   });
 
   function selectProfile(profile: CustomerProfile) {
-    setEditingProfile(profile);
+    setEditingProfile(withCustomerProfileDefaults(profile));
     setIsNew(false);
     setIsEditing(false);
     props.onSelect(profile.id);
@@ -2218,12 +2235,19 @@ function CustomerProfilesModule(props: {
         (profile.shortName === editingProfile.shortName || profile.fullName === editingProfile.fullName),
     );
     if (duplicated && !window.confirm("存在客户简称或全称相同的客户，是否继续保存？")) return;
-    props.onSave({
+    const firstStatementPeriod = props.store.monthlyStatements
+      .filter((statement) => statement.customerId === editingProfile.id)
+      .sort((left, right) => left.periodMonth.localeCompare(right.periodMonth))[0]?.periodMonth;
+    const nextProfile = {
       ...editingProfile,
       shortName: editingProfile.shortName.trim(),
       fullName: editingProfile.fullName.trim(),
       contactName: editingProfile.contactName.trim(),
-    });
+      startupPeriodMonth: firstStatementPeriod ?? editingProfile.startupPeriodMonth?.trim() ?? "",
+      startupOpeningBalance: parseMoney(editingProfile.startupOpeningBalance ?? 0),
+    };
+    props.onSave(nextProfile);
+    setEditingProfile(withCustomerProfileDefaults(nextProfile));
     setIsNew(false);
     setIsEditing(false);
   }
@@ -2367,6 +2391,19 @@ function CustomerProfilesModule(props: {
 
               <ProfileSection title="对账信息">
                 <ProfileInput label="默认账期" onChange={(value) => updateProfile({ defaultPaymentTerm: value })} value={editingProfile.defaultPaymentTerm} />
+                <ProfileInput
+                  label="启用账期"
+                  onChange={(value) => updateProfile({ startupPeriodMonth: value })}
+                  type="month"
+                  value={editingProfile.startupPeriodMonth ?? ""}
+                />
+                <ProfileInput
+                  label="启用期初余额"
+                  onChange={(value) => updateProfile({ startupOpeningBalance: parseMoney(value) })}
+                  step="0.01"
+                  type="number"
+                  value={editingProfile.startupOpeningBalance ?? 0}
+                />
                 <ProfileInput label="默认对账日" onChange={(value) => updateProfile({ statementDay: value })} value={editingProfile.statementDay} />
                 <ProfileInput label="默认付款日" onChange={(value) => updateProfile({ paymentDay: value })} value={editingProfile.paymentDay} />
                 <ProfileInput label="币种" onChange={(value) => updateProfile({ currency: value })} value={editingProfile.currency} />
@@ -2415,6 +2452,8 @@ function createBlankCustomerProfile(): CustomerProfile {
     invoicePhone: "",
     bankName: "",
     bankAccount: "",
+    startupPeriodMonth: "",
+    startupOpeningBalance: 0,
     defaultPaymentTerm: "月结",
     statementDay: "每月25日",
     paymentDay: "次月10日",
@@ -2428,6 +2467,14 @@ function createBlankCustomerProfile(): CustomerProfile {
   };
 }
 
+function withCustomerProfileDefaults(profile: CustomerProfile): CustomerProfile {
+  return {
+    ...profile,
+    startupPeriodMonth: profile.startupPeriodMonth ?? "",
+    startupOpeningBalance: typeof profile.startupOpeningBalance === "number" ? profile.startupOpeningBalance : 0,
+  };
+}
+
 function ProfileSection(props: { children: JSX.Element | JSX.Element[]; title: string }) {
   return (
     <section className="customer-profile-section">
@@ -2437,14 +2484,28 @@ function ProfileSection(props: { children: JSX.Element | JSX.Element[]; title: s
   );
 }
 
-function ProfileInput(props: { label: string; onChange(value: string): void; required?: boolean; value: string }) {
+function ProfileInput(props: {
+  label: string;
+  min?: string;
+  onChange(value: string): void;
+  required?: boolean;
+  step?: string;
+  type?: string;
+  value: string | number;
+}) {
   return (
     <label className="customer-profile-field">
       <span>
         {props.label}
         {props.required && <em>*</em>}
       </span>
-      <input onChange={(event) => props.onChange(event.target.value)} value={props.value} />
+      <input
+        min={props.min}
+        onChange={(event) => props.onChange(event.target.value)}
+        step={props.step}
+        type={props.type ?? "text"}
+        value={props.value}
+      />
     </label>
   );
 }
@@ -2604,23 +2665,17 @@ function ReceiptPoolModule(props: {
   receipts: CustomerReceipt[];
 }) {
   const [selectedCustomerId, setSelectedCustomerId] = useState("");
-  const [periodMonth, setPeriodMonth] = useState("");
   const [method, setMethod] = useState<PaymentMethod | "">("");
   const [keyword, setKeyword] = useState("");
   const [editingReceipt, setEditingReceipt] = useState<CustomerReceipt | null>(null);
-  const receiptPeriodOptions = Array.from(new Set(props.receipts.map((receipt) => receipt.periodMonth || receipt.receiptDate.slice(0, 7))))
-    .filter(Boolean)
-    .sort()
-    .reverse();
   const filteredReceipts = selectedCustomerId
     ? props.receipts.filter((receipt) => receipt.customerId === selectedCustomerId)
     : props.receipts;
   const visibleReceipts = filteredReceipts.filter((receipt) => {
     const text = `${receipt.transactionNo ?? ""} ${receipt.note ?? ""}`.toLowerCase();
-    const matchesPeriod = !periodMonth || (receipt.periodMonth || receipt.receiptDate.slice(0, 7)) === periodMonth;
     const matchesMethod = !method || receipt.method === method;
     const matchesKeyword = !keyword.trim() || text.includes(keyword.trim().toLowerCase());
-    return matchesPeriod && matchesMethod && matchesKeyword;
+    return matchesMethod && matchesKeyword;
   });
   const totalAmount = visibleReceipts.reduce((sum, receipt) => sum + receipt.amount, 0);
   const totalAllocated = visibleReceipts.reduce((sum, receipt) => sum + getReceiptAllocatedAmount(receipt.id, props.allocations), 0);
@@ -2670,15 +2725,6 @@ function ReceiptPoolModule(props: {
           />
         </label>
         <label>
-          归属账期
-          <AnimatedSelect
-            ariaLabel="归属账期"
-            onChange={setPeriodMonth}
-            options={[{ label: "全部账期", value: "" }, ...toSelectOptions(receiptPeriodOptions)]}
-            value={periodMonth}
-          />
-        </label>
-        <label>
           收款方式
           <AnimatedSelect
             ariaLabel="收款方式"
@@ -2695,7 +2741,6 @@ function ReceiptPoolModule(props: {
           className="recon-button recon-button-light"
           onClick={() => {
             setSelectedCustomerId("");
-            setPeriodMonth("");
             setMethod("");
             setKeyword("");
           }}
@@ -2714,7 +2759,6 @@ function ReceiptPoolModule(props: {
             <th>未分配</th>
             <th>收款方式</th>
             <th>流水号</th>
-            <th>归属账期</th>
             <th>备注</th>
             <th>操作</th>
           </tr>
@@ -2731,7 +2775,6 @@ function ReceiptPoolModule(props: {
                 <td className={receipt.amount - allocated > 0 ? "is-danger" : "is-ok"}>¥ {formatMoney(receipt.amount - allocated)}</td>
                 <td>{receipt.method}</td>
                 <td>{receipt.transactionNo || "-"}</td>
-                <td>{receipt.periodMonth || "-"}</td>
                 <td>{receipt.note || "-"}</td>
                 <td>
                   <div className="recon-row-actions">
@@ -2753,7 +2796,7 @@ function ReceiptPoolModule(props: {
             <td>¥ {formatMoney(totalAmount)}</td>
             <td>¥ {formatMoney(totalAllocated)}</td>
             <td className={totalUnallocated > 0 ? "is-danger" : "is-ok"}>¥ {formatMoney(totalUnallocated)}</td>
-            <td colSpan={5}></td>
+            <td colSpan={4}></td>
           </tr>
         </tfoot>
       </table>
@@ -2767,7 +2810,6 @@ function ReceiptPoolModule(props: {
             props.onSaveReceipt(receipt);
             setEditingReceipt(null);
           }}
-          periodOptions={receiptPeriodOptions}
           receipt={editingReceipt}
         />
       )}
@@ -2781,7 +2823,6 @@ function ReceiptRecordEditModal(props: {
   customers: Customer[];
   onClose(): void;
   onSave(receipt: CustomerReceipt): void;
-  periodOptions: string[];
   receipt: CustomerReceipt;
 }) {
   const [customerId, setCustomerId] = useState(props.receipt.customerId);
@@ -2789,10 +2830,8 @@ function ReceiptRecordEditModal(props: {
   const [amount, setAmount] = useState(props.receipt.amount.toFixed(2));
   const [method, setMethod] = useState<PaymentMethod>(props.receipt.method);
   const [transactionNo, setTransactionNo] = useState(props.receipt.transactionNo ?? "");
-  const [periodMonth, setPeriodMonth] = useState(props.receipt.periodMonth ?? "");
   const [note, setNote] = useState(props.receipt.note ?? "");
   const [error, setError] = useState("");
-  const periodOptions = Array.from(new Set([props.receipt.periodMonth, ...props.periodOptions].filter(Boolean) as string[]));
   const customerOptions = props.customers.map((customer) => {
     const profile = props.customerProfiles.find((item) => item.id === customer.id);
     return {
@@ -2831,7 +2870,7 @@ function ReceiptRecordEditModal(props: {
             amount: parsedAmount,
             method,
             transactionNo: transactionNo.trim(),
-            periodMonth: periodMonth.trim(),
+            periodMonth: undefined,
             note: note.trim(),
           });
         }}
@@ -2852,19 +2891,6 @@ function ReceiptRecordEditModal(props: {
           <Field label="流水号 / 承兑编号">
             <input onChange={(event) => setTransactionNo(event.target.value)} value={transactionNo} />
           </Field>
-          <Field label="归属账期">
-            <input
-              list="receipt-edit-periods"
-              onChange={(event) => setPeriodMonth(event.target.value)}
-              placeholder="例如 2026-07"
-              value={periodMonth}
-            />
-          </Field>
-          <datalist id="receipt-edit-periods">
-            {periodOptions.map((period) => (
-              <option key={period} value={period} />
-            ))}
-          </datalist>
           <Field label="备注">
             <textarea onChange={(event) => setNote(event.target.value)} value={note} />
           </Field>
@@ -3317,7 +3343,6 @@ type ReceiptPoolRow = {
   amount: string;
   method: PaymentMethod;
   transactionNo: string;
-  periodMonth: string;
   note: string;
   createdAt?: string;
   isNew?: boolean;
@@ -3328,12 +3353,8 @@ function ReceiptPoolModal(props: {
   customer?: Customer;
   onClose(): void;
   onSave(receipts: CustomerReceipt[], deletedReceiptIds: string[]): void;
-  periods: string[];
   receipts: CustomerReceipt[];
 }) {
-  const periodOptions = Array.from(
-    new Set([...props.periods, ...props.receipts.map((receipt) => receipt.periodMonth).filter(Boolean) as string[]]),
-  ).sort().reverse();
   const [rows, setRows] = useState<ReceiptPoolRow[]>(() =>
     props.receipts.map((receipt) => ({
       id: receipt.id,
@@ -3341,7 +3362,6 @@ function ReceiptPoolModal(props: {
       amount: receipt.amount.toFixed(2),
       method: receipt.method,
       transactionNo: receipt.transactionNo ?? "",
-      periodMonth: receipt.periodMonth ?? "",
       note: receipt.note ?? "",
       createdAt: receipt.createdAt,
     })),
@@ -3362,7 +3382,6 @@ function ReceiptPoolModal(props: {
         amount: "",
         method: "银行转账",
         transactionNo: "",
-        periodMonth: periodOptions[0] ?? "",
         note: "",
         isNew: true,
       },
@@ -3411,7 +3430,6 @@ function ReceiptPoolModal(props: {
         amount,
         method: row.method,
         transactionNo: row.transactionNo.trim(),
-        periodMonth: row.periodMonth,
         note: row.note.trim(),
         createdAt: row.createdAt ?? today,
         updatedAt: today,
@@ -3423,7 +3441,7 @@ function ReceiptPoolModal(props: {
   }
 
   return (
-    <Modal onClose={props.onClose} size="wide" title="收款池">
+    <Modal onClose={props.onClose} size="receiptPool" title="收款池">
       <div className="receipt-pool">
         <div className="receipt-pool__customer">
           客户：<strong>{props.customer?.name ?? "未选择客户"}</strong>
@@ -3436,7 +3454,6 @@ function ReceiptPoolModal(props: {
                 <th>收款金额</th>
                 <th>收款方式</th>
                 <th>流水号 / 承兑编号</th>
-                <th>归属账期</th>
                 <th>已分配金额</th>
                 <th>未分配金额</th>
                 <th>备注</th>
@@ -3477,14 +3494,8 @@ function ReceiptPoolModal(props: {
                       />
                     </td>
                     <td>
-                      <AnimatedSelect
-                        ariaLabel="归属账期"
-                        onChange={(value) => updateRow(row.id, { periodMonth: value })}
-                        options={[{ label: "未指定", value: "" }, ...toSelectOptions(periodOptions)]}
-                        value={row.periodMonth}
-                      />
+                      ¥ {formatMoney(allocatedAmount)}
                     </td>
-                    <td>¥ {formatMoney(allocatedAmount)}</td>
                     <td className={amount - allocatedAmount > 0 ? "is-danger" : "is-ok"}>
                       ¥ {formatMoney(amount - allocatedAmount)}
                     </td>
@@ -3690,10 +3701,10 @@ function StatementPreviewModal(props: {
 }) {
   const statement = props.statementSummary.statement;
   const statementDate = formatDate(new Date());
-  const openingBalance = props.statementSummary.realtimeOpeningBalance;
+  const openingBalance = props.statementSummary.openingBalance;
   const currentTotal = props.statementSummary.styleReceivableTotal;
   const adjustmentNetTotal = roundMoney(props.statementSummary.increaseAdjustmentTotal - props.statementSummary.decreaseAdjustmentTotal);
-  const grandTotal = props.statementSummary.grandTotal;
+  const grandTotal = roundMoney(openingBalance + props.statementSummary.adjustedReceivable);
   const deductionTotal = roundMoney(-props.statementSummary.decreaseAdjustmentTotal);
   const getAdjustmentStyleNo = (styleAccountId?: string) =>
     props.statementSummary.items.find((item) => item.styleAccount?.id === styleAccountId || item.item.styleAccountId === styleAccountId)?.styleAccount?.styleNo ??
@@ -3843,10 +3854,17 @@ function formatDate(date: Date) {
   return `${year}-${month}-${day}`;
 }
 
-function Modal(props: { children: JSX.Element; onClose(): void; size?: "wide"; title: string }) {
+function Modal(props: { children: JSX.Element; onClose(): void; size?: "wide" | "receiptPool"; title: string }) {
+  const sizeClass =
+    props.size === "receiptPool"
+      ? "recon-modal-receipt-pool"
+      : props.size === "wide"
+        ? "recon-modal-wide"
+        : "";
+
   return (
     <div className="recon-modal-backdrop" role="presentation">
-      <div aria-modal="true" className={`recon-modal ${props.size === "wide" ? "recon-modal-wide" : ""}`} role="dialog">
+      <div aria-modal="true" className={`recon-modal ${sizeClass}`} role="dialog">
         <div className="recon-modal-head">
           <h2>{props.title}</h2>
           <button onClick={props.onClose} type="button">

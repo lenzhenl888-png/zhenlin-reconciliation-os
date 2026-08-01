@@ -209,12 +209,17 @@ export function getAvailablePeriods(store: ReconciliationStore) {
   return Array.from(new Set(store.monthlyStatements.map((statement) => statement.periodMonth))).sort().reverse();
 }
 
+export function getCustomerStartupOpeningBalance(customerId: string, store: ReconciliationStore) {
+  const profile = getCustomerProfile(customerId, store);
+  return roundMoney(typeof profile?.startupOpeningBalance === "number" ? profile.startupOpeningBalance : 0);
+}
+
 export function getDefaultOpeningBalance(customerId: string, periodMonth: string, store: ReconciliationStore) {
   const previousStatements = store.monthlyStatements
     .filter((statement) => statement.customerId === customerId && statement.periodMonth < periodMonth)
     .sort((left, right) => right.periodMonth.localeCompare(left.periodMonth));
   const previousStatement = previousStatements[0];
-  return previousStatement ? summarizeStatement(previousStatement, store).closingBalance : 0;
+  return previousStatement ? summarizeStatement(previousStatement, store).closingBalance : getCustomerStartupOpeningBalance(customerId, store);
 }
 
 export function getRealtimeOpeningBalance(statement: MonthlyStatement, store: ReconciliationStore) {
@@ -222,7 +227,7 @@ export function getRealtimeOpeningBalance(statement: MonthlyStatement, store: Re
     .filter((item) => item.customerId === statement.customerId && item.periodMonth < statement.periodMonth)
     .sort((left, right) => right.periodMonth.localeCompare(left.periodMonth));
   const previousStatement = previousStatements[0];
-  return previousStatement ? summarizeStatement(previousStatement, store).closingBalance : roundMoney(statement.openingBalance);
+  return previousStatement ? summarizeStatement(previousStatement, store).closingBalance : getCustomerStartupOpeningBalance(statement.customerId, store);
 }
 
 export function getReceiptAllocatedAmount(receiptId: string, allocations: ReceiptAllocation[]) {

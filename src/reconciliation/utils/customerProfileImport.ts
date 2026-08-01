@@ -28,6 +28,8 @@ const fieldAliases: Array<{ key: keyof CustomerProfile; aliases: string[] }> = [
   { key: "bankName", aliases: ["开户银行"] },
   { key: "bankAccount", aliases: ["银行账号", "银行账户"] },
   { key: "defaultPaymentTerm", aliases: ["默认账期"] },
+  { key: "startupPeriodMonth", aliases: ["启用账期", "启用月份", "期初账期"] },
+  { key: "startupOpeningBalance", aliases: ["启用期初余额", "期初余额", "软件启用期初余额"] },
   { key: "statementDay", aliases: ["默认对账日"] },
   { key: "paymentDay", aliases: ["默认付款日"] },
   { key: "currency", aliases: ["币种"] },
@@ -101,6 +103,8 @@ function rowsToCustomerProfiles(rows: string[][]): CustomerProfileImportParseRes
         } else {
           fields.needInvoiceBeforePayment = booleanValue;
         }
+      } else if (key === "startupOpeningBalance") {
+        fields.startupOpeningBalance = parseMoneyValue(value);
       } else {
         fields[key] = value as never;
       }
@@ -141,6 +145,11 @@ function parseBooleanValue(value: string) {
   if (["是", "yes", "y", "true", "1"].includes(normalized)) return true;
   if (["否", "no", "n", "false", "0"].includes(normalized)) return false;
   return undefined;
+}
+
+function parseMoneyValue(value: string) {
+  const parsed = Number(String(value).replace(/,/g, ""));
+  return Math.round((Number.isFinite(parsed) ? parsed : 0) * 100) / 100;
 }
 
 function parseCsvRows(text: string) {

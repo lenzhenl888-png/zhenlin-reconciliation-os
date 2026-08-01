@@ -43,6 +43,8 @@ export type CustomerProfile = {
   bankName: string;
   bankAccount: string;
   defaultPaymentTerm: string;
+  startupPeriodMonth?: string;
+  startupOpeningBalance?: number;
   statementDay: string;
   paymentDay: string;
   currency: string;

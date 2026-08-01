@@ -105,6 +105,8 @@ function createProfileFromCustomer(customer: Customer, now: string): CustomerPro
     invoicePhone: "",
     bankName: "",
     bankAccount: "",
+    startupPeriodMonth: "",
+    startupOpeningBalance: 0,
     defaultPaymentTerm: "月结",
     statementDay: "每月25日",
     paymentDay: "次月10日",
@@ -207,7 +209,11 @@ function migrateLegacyStore(store: Partial<ReconciliationStore>): Reconciliation
 
 function normalizeStore(store: ReconciliationStore): ReconciliationStore {
   const now = new Date().toISOString().slice(0, 10);
-  const existingProfiles = store.customerProfiles ?? [];
+  const existingProfiles = (store.customerProfiles ?? []).map((profile) => ({
+    ...profile,
+    startupPeriodMonth: profile.startupPeriodMonth ?? "",
+    startupOpeningBalance: typeof profile.startupOpeningBalance === "number" ? profile.startupOpeningBalance : 0,
+  }));
   const profileIds = new Set(existingProfiles.map((profile) => profile.id));
   const customerProfiles = [
     ...existingProfiles,
@@ -233,7 +239,6 @@ function normalizeStore(store: ReconciliationStore): ReconciliationStore {
     }),
     customerReceipts: store.customerReceipts.map((receipt) => ({
       ...receipt,
-      periodMonth: receipt.periodMonth ?? receipt.receiptDate.slice(0, 7),
       createdAt: receipt.createdAt ?? now,
       updatedAt: receipt.updatedAt ?? now,
     })),
