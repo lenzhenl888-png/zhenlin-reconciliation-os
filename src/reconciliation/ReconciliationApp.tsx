@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent 
 import {
   Banknote,
   BarChart3,
+  ChevronLeft,
+  ChevronRight,
   CreditCard,
   Eye,
   FileCog,
@@ -3348,6 +3350,8 @@ type ReceiptPoolRow = {
   isNew?: boolean;
 };
 
+const RECEIPT_POOL_PAGE_SIZE = 12;
+
 function ReceiptPoolModal(props: {
   allocations: ReceiptAllocation[];
   customer?: Customer;
@@ -3368,24 +3372,38 @@ function ReceiptPoolModal(props: {
   );
   const [deletedReceiptIds, setDeletedReceiptIds] = useState<string[]>([]);
   const [error, setError] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageCount = Math.max(1, Math.ceil(rows.length / RECEIPT_POOL_PAGE_SIZE));
+  const visibleRows = useMemo(
+    () => rows.slice((currentPage - 1) * RECEIPT_POOL_PAGE_SIZE, currentPage * RECEIPT_POOL_PAGE_SIZE),
+    [currentPage, rows],
+  );
+
+  useEffect(() => {
+    setCurrentPage((page) => Math.min(page, pageCount));
+  }, [pageCount]);
 
   function updateRow(rowId: string, patch: Partial<ReceiptPoolRow>) {
     setRows((currentRows) => currentRows.map((row) => (row.id === rowId ? { ...row, ...patch } : row)));
   }
 
   function addRow() {
-    setRows((currentRows) => [
-      ...currentRows,
-      {
-        id: createId("receipt"),
-        receiptDate: getTodayString(),
-        amount: "",
-        method: "银行转账",
-        transactionNo: "",
-        note: "",
-        isNew: true,
-      },
-    ]);
+    setRows((currentRows) => {
+      const nextRows = [
+        ...currentRows,
+        {
+          id: createId("receipt"),
+          receiptDate: getTodayString(),
+          amount: "",
+          method: "银行转账" as PaymentMethod,
+          transactionNo: "",
+          note: "",
+          isNew: true,
+        },
+      ];
+      setCurrentPage(Math.ceil(nextRows.length / RECEIPT_POOL_PAGE_SIZE));
+      return nextRows;
+    });
   }
 
   function deleteRow(row: ReceiptPoolRow) {
@@ -3407,18 +3425,21 @@ function ReceiptPoolModal(props: {
     const today = getTodayString();
     const nextReceipts: CustomerReceipt[] = [];
 
-    for (const row of rows) {
+    for (const [rowIndex, row] of rows.entries()) {
       const amount = parseMoney(row.amount);
       const allocatedAmount = getReceiptAllocatedAmount(row.id, props.allocations);
       if (!/^\d{4}-\d{2}-\d{2}$/.test(row.receiptDate)) {
+        setCurrentPage(Math.floor(rowIndex / RECEIPT_POOL_PAGE_SIZE) + 1);
         setError("收款日期必须使用 YYYY-MM-DD 格式。");
         return;
       }
       if (!row.amount.trim() || amount <= 0) {
+        setCurrentPage(Math.floor(rowIndex / RECEIPT_POOL_PAGE_SIZE) + 1);
         setError("收款金额不能为空，且必须大于 0。");
         return;
       }
       if (amount < allocatedAmount) {
+        setCurrentPage(Math.floor(rowIndex / RECEIPT_POOL_PAGE_SIZE) + 1);
         setError("已有分配记录的收款，修改后的收款金额不能小于已分配金额。");
         return;
       }
@@ -3461,7 +3482,7 @@ function ReceiptPoolModal(props: {
               </tr>
             </thead>
             <tbody>
-              {rows.map((row) => {
+              {visibleRows.map((row) => {
                 const allocatedAmount = getReceiptAllocatedAmount(row.id, props.allocations);
                 const amount = parseMoney(row.amount);
                 return (
@@ -3520,11 +3541,37 @@ function ReceiptPoolModal(props: {
           {rows.length === 0 && <EmptyPanel text="当前客户暂无收款记录，可点击新增一行录入。" />}
         </div>
         <div className="receipt-pool__below">
-          <button className="recon-button recon-button-light" onClick={addRow} type="button">
-            <Plus size={16} />
-            新增一行
-          </button>
+          <div className="receipt-pool__below-actions">
+            <button className="recon-button recon-button-light" onClick={addRow} type="button">
+              <Plus size={16} />
+              新增一行
+            </button>
+            <span className="receipt-pool__count">共 {rows.length} 笔收款</span>
+          </div>
           {error && <span className="receipt-pool__error">{error}</span>}
+          <div className="receipt-pool__pagination" aria-label="收款池分页">
+            <button
+              aria-label="上一页"
+              disabled={currentPage <= 1}
+              onClick={() => setCurrentPage((page) => Math.max(1, page - 1))}
+              title="上一页"
+              type="button"
+            >
+              <ChevronLeft size={17} />
+            </button>
+            <span>
+              第 {currentPage} / {pageCount} 页
+            </span>
+            <button
+              aria-label="下一页"
+              disabled={currentPage >= pageCount}
+              onClick={() => setCurrentPage((page) => Math.min(pageCount, page + 1))}
+              title="下一页"
+              type="button"
+            >
+              <ChevronRight size={17} />
+            </button>
+          </div>
         </div>
         <div className="receipt-pool__footer">
           <button className="recon-button recon-button-light" onClick={props.onClose} type="button">

@@ -1988,6 +1988,7 @@
 }
 
 .receipt-pool__table-wrap {
+  min-height: 0;
   overflow: auto;
   padding: 10px 14px 4px;
 }
@@ -2008,6 +2009,9 @@
 }
 
 .receipt-pool-table th {
+  position: sticky;
+  z-index: 2;
+  top: 0;
   background: #f5f7fa;
   color: #546275;
   font-weight: 900;
@@ -2086,6 +2090,43 @@
   gap: 14px;
   padding: 10px 18px;
   border-top: 1px solid #eef2f6;
+}
+
+.receipt-pool__below-actions,
+.receipt-pool__pagination {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.receipt-pool__count,
+.receipt-pool__pagination span {
+  color: #68788e;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.receipt-pool__pagination button {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border: 1px solid #cfd8e5;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #29445f;
+  cursor: pointer;
+}
+
+.receipt-pool__pagination button:hover:not(:disabled) {
+  border-color: #7ca7c6;
+  background: #eef7fc;
+}
+
+.receipt-pool__pagination button:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .receipt-pool__error {
