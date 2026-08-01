@@ -3350,7 +3350,7 @@ type ReceiptPoolRow = {
   isNew?: boolean;
 };
 
-const RECEIPT_POOL_PAGE_SIZE = 12;
+const RECEIPT_POOL_PAGE_SIZE = 10;
 
 function ReceiptPoolModal(props: {
   allocations: ReceiptAllocation[];
