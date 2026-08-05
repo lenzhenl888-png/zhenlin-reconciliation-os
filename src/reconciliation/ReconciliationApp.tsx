@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import {
+  AlertTriangle,
   Banknote,
   BarChart3,
   ChevronLeft,
@@ -11,7 +12,10 @@ import {
   FileText,
   Landmark,
   LayoutDashboard,
+  Lock,
+  LockOpen,
   Menu,
+  Network,
   Pencil,
   Plus,
   Printer,
@@ -133,6 +137,8 @@ export function ReconciliationApp() {
   const [filters, setFilters] = useState<Filters>(emptyFilters);
   const [draftFilters, setDraftFilters] = useState<Filters>(emptyFilters);
   const [modal, setModal] = useState<ModalState>(null);
+  const [pendingAdjustmentDeleteId, setPendingAdjustmentDeleteId] = useState<string>();
+  const [pendingStatementItemDeleteId, setPendingStatementItemDeleteId] = useState<string>();
   const [cloudStatus, setCloudStatus] = useState<CloudStatus>("loading");
   const [cloudNotice, setCloudNotice] = useState("正在同步云端数据...");
   const [showCloudNotice, setShowCloudNotice] = useState(true);
@@ -619,20 +625,28 @@ export function ReconciliationApp() {
   }, itemId?: string) {
     const today = getTodayString();
     if (itemId) {
-      updateStore((currentStore) => ({
-        ...currentStore,
-        statementItems: currentStore.statementItems.map((item) =>
-          item.id === itemId
-            ? {
-                ...item,
-                statementId: values.statementId,
-                customerId: values.customerId,
-                receivableAmount: values.receivableAmount,
-                note: values.note,
-              }
-            : item,
-        ),
-      }));
+      updateStore((currentStore) => {
+        const styleAccountId = currentStore.statementItems.find((item) => item.id === itemId)?.styleAccountId;
+        return {
+          ...currentStore,
+          styleAccounts: currentStore.styleAccounts.map((account) =>
+            account.id === styleAccountId
+              ? { ...account, customerId: values.customerId, styleNo: values.styleNo, updatedAt: today }
+              : account,
+          ),
+          statementItems: currentStore.statementItems.map((item) =>
+            item.id === itemId
+              ? {
+                  ...item,
+                  statementId: values.statementId,
+                  customerId: values.customerId,
+                  receivableAmount: values.receivableAmount,
+                  note: values.note,
+                }
+              : item,
+          ),
+        };
+      });
       return;
     }
 
@@ -671,11 +685,17 @@ export function ReconciliationApp() {
   }
 
   function deleteStatementItem(itemId: string) {
-    if (!window.confirm("确认删除这条月度对账明细吗？")) return;
+    setPendingStatementItemDeleteId(itemId);
+  }
+
+  function confirmDeleteStatementItem() {
+    if (!pendingStatementItemDeleteId) return;
     updateStore((currentStore) => ({
       ...currentStore,
-      statementItems: currentStore.statementItems.filter((item) => item.id !== itemId),
+      statementItems: currentStore.statementItems.filter((item) => item.id !== pendingStatementItemDeleteId),
     }));
+    if (selectedItemId === pendingStatementItemDeleteId) setSelectedItemId("");
+    setPendingStatementItemDeleteId(undefined);
   }
 
   function upsertStatementAdjustment(adjustment: StatementAdjustment) {
@@ -691,11 +711,16 @@ export function ReconciliationApp() {
   }
 
   function deleteStatementAdjustment(adjustmentId: string) {
-    if (!window.confirm("确认删除这条扣款/调整记录吗？")) return;
+    setPendingAdjustmentDeleteId(adjustmentId);
+  }
+
+  function confirmDeleteStatementAdjustment() {
+    if (!pendingAdjustmentDeleteId) return;
     updateStore((currentStore) => ({
       ...currentStore,
-      statementAdjustments: (currentStore.statementAdjustments ?? []).filter((item) => item.id !== adjustmentId),
+      statementAdjustments: (currentStore.statementAdjustments ?? []).filter((item) => item.id !== pendingAdjustmentDeleteId),
     }));
+    setPendingAdjustmentDeleteId(undefined);
   }
 
   function upsertInvoice(accountId: string, record: InvoiceRecord) {
@@ -745,9 +770,25 @@ export function ReconciliationApp() {
     updateStore((currentStore) => ({
       ...currentStore,
       customerReceipts: currentStore.customerReceipts.map((item) =>
-        item.id === receipt.id ? { ...receipt, amount: roundMoney(receipt.amount), updatedAt: getTodayString() } : item,
+        item.id === receipt.id
+          ? item.isLocked
+            ? item
+            : { ...receipt, amount: roundMoney(receipt.amount), updatedAt: getTodayString() }
+          : item,
       ),
     }));
+  }
+
+  function deleteCustomerReceipt(receiptId: string) {
+    updateStore((currentStore) => {
+      const receipt = currentStore.customerReceipts.find((item) => item.id === receiptId);
+      if (!receipt || receipt.isLocked) return currentStore;
+      return {
+        ...currentStore,
+        customerReceipts: currentStore.customerReceipts.filter((item) => item.id !== receiptId),
+        receiptAllocations: currentStore.receiptAllocations.filter((allocation) => allocation.receiptId !== receiptId),
+      };
+    });
   }
 
   function importReceipts(rows: ReceiptImportRow[], parseWarnings: string[]) {
@@ -813,6 +854,7 @@ export function ReconciliationApp() {
           receiptDate: row.receiptDate,
           amount: roundMoney(row.amount),
           method: row.method,
+          isLocked: false,
           transactionNo: row.transactionNo,
           note: row.note,
           createdAt: today,
@@ -1268,6 +1310,7 @@ export function ReconciliationApp() {
             customerProfiles={store.customerProfiles}
             customers={store.customers}
             onAllocate={(customerId) => setModal({ type: "allocation", customerId })}
+            onDeleteReceipt={deleteCustomerReceipt}
             onImport={importReceipts}
             onSaveReceipt={updateReceipt}
             receipts={store.customerReceipts}
@@ -1356,6 +1399,26 @@ export function ReconciliationApp() {
           customerName={selectedCustomerName}
           onClose={() => setModal(null)}
           statementSummary={selectedStatementSummary}
+        />
+      )}
+      {pendingStatementItemDeleteId && (
+        <ConfirmationDialog
+          confirmLabel="确认删除"
+          description="删除后，这条款号应收将从当前月度对账单中移除，并重新计算本月应收和未收金额。"
+          onCancel={() => setPendingStatementItemDeleteId(undefined)}
+          onConfirm={confirmDeleteStatementItem}
+          title="确认删除这条款号应收？"
+          tone="danger"
+        />
+      )}
+      {pendingAdjustmentDeleteId && (
+        <ConfirmationDialog
+          confirmLabel="确认删除"
+          description="删除后，该扣款或调整金额将不再参与当前月度对账单及关联款号的金额计算。"
+          onCancel={() => setPendingAdjustmentDeleteId(undefined)}
+          onConfirm={confirmDeleteStatementAdjustment}
+          title="确认删除这条扣款调整？"
+          tone="danger"
         />
       )}
       </div>
@@ -1582,7 +1645,7 @@ function CustomerStatementPanel(props: {
                         <td>
                           <div className="recon-row-actions">
                             <button onClick={() => props.onSelectItem(itemSummary.item.id)} title="查看" type="button">
-                              <FileText size={15} />
+                              <Eye size={15} />
                             </button>
                             <button onClick={() => props.onEditItem(itemSummary.item)} title="编辑" type="button">
                               <Pencil size={15} />
@@ -1806,24 +1869,13 @@ function StatementAdjustmentTable(props: {
       {props.adjustments.map((adjustment) => {
         const signedAmount = getAdjustmentSignedAmount(adjustment);
         const styleNo = styleOptions.find((style) => style.id === adjustment.relatedStyleAccountId)?.styleNo ?? "整月调整";
+        const description = adjustment.reason || adjustment.note || "-";
         return (
           <article className="recon-mini-card recon-adjustment-card" key={adjustment.id}>
             <div className="recon-mini-card-head">
-              <div className="recon-adjustment-card-main">
-                <div>
-                  <span>关联款号</span>
-                  <strong>{styleNo}</strong>
-                </div>
-                <div>
-                  <span>金额</span>
-                  <strong className={signedAmount > 0 ? "is-adjustment-positive" : signedAmount < 0 ? "is-adjustment-negative" : ""}>
-                    {signedAmount > 0 ? "+" : signedAmount < 0 ? "-" : ""} ¥ {formatMoney(Math.abs(signedAmount))}
-                  </strong>
-                </div>
-                <div>
-                  <span>说明</span>
-                  <strong>{adjustment.reason || adjustment.note || "-"}</strong>
-                </div>
+              <div className="recon-adjustment-card-style">
+                <span>关联款号</span>
+                <strong title={styleNo}>{styleNo}</strong>
               </div>
               <div className="recon-row-actions">
                 <button onClick={() => props.onView(adjustment)} title="查看" type="button">
@@ -1834,6 +1886,18 @@ function StatementAdjustmentTable(props: {
                 </button>
               </div>
             </div>
+            <dl>
+              <div>
+                <dt>金额</dt>
+                <dd className={signedAmount > 0 ? "is-adjustment-positive" : signedAmount < 0 ? "is-adjustment-negative" : ""}>
+                  {signedAmount > 0 ? "+" : signedAmount < 0 ? "-" : ""} ¥ {formatMoney(Math.abs(signedAmount))}
+                </dd>
+              </div>
+              <div>
+                <dt>说明</dt>
+                <dd className="recon-adjustment-card-description" title={description}>{description}</dd>
+              </div>
+            </dl>
           </article>
         );
       })}
@@ -2662,6 +2726,7 @@ function ReceiptPoolModule(props: {
   customerProfiles: CustomerProfile[];
   customers: Customer[];
   onAllocate(customerId: string): void;
+  onDeleteReceipt(receiptId: string): void;
   onImport(rows: ReceiptImportRow[], warnings: string[]): void;
   onSaveReceipt(receipt: CustomerReceipt): void;
   receipts: CustomerReceipt[];
@@ -2670,6 +2735,7 @@ function ReceiptPoolModule(props: {
   const [method, setMethod] = useState<PaymentMethod | "">("");
   const [keyword, setKeyword] = useState("");
   const [editingReceipt, setEditingReceipt] = useState<CustomerReceipt | null>(null);
+  const [pendingDeleteReceipt, setPendingDeleteReceipt] = useState<CustomerReceipt | null>(null);
   const filteredReceipts = selectedCustomerId
     ? props.receipts.filter((receipt) => receipt.customerId === selectedCustomerId)
     : props.receipts;
@@ -2780,11 +2846,33 @@ function ReceiptPoolModule(props: {
                 <td>{receipt.note || "-"}</td>
                 <td>
                   <div className="recon-row-actions">
-                    <button className="recon-inline-action" onClick={() => setEditingReceipt(receipt)} type="button">
-                      编辑
+                    <button
+                      aria-label="编辑收款"
+                      disabled={receipt.isLocked}
+                      onClick={() => setEditingReceipt(receipt)}
+                      title={receipt.isLocked ? "该收款已锁定，需在收款池解锁后才能编辑" : "编辑"}
+                      type="button"
+                    >
+                      <Pencil size={15} />
                     </button>
-                    <button className="recon-inline-action" onClick={() => props.onAllocate(receipt.customerId)} type="button">
-                      分配
+                    <button
+                      aria-label="收款分配"
+                      className="is-allocation-action"
+                      onClick={() => props.onAllocate(receipt.customerId)}
+                      title="收款分配"
+                      type="button"
+                    >
+                      <Network size={16} />
+                    </button>
+                    <button
+                      aria-label="删除收款"
+                      className="is-danger-action"
+                      disabled={receipt.isLocked}
+                      onClick={() => setPendingDeleteReceipt(receipt)}
+                      title={receipt.isLocked ? "该收款已锁定，需在收款池解锁后才能删除" : "删除"}
+                      type="button"
+                    >
+                      <Trash2 size={15} />
                     </button>
                   </div>
                 </td>
@@ -2813,6 +2901,23 @@ function ReceiptPoolModule(props: {
             setEditingReceipt(null);
           }}
           receipt={editingReceipt}
+        />
+      )}
+      {pendingDeleteReceipt && (
+        <ConfirmationDialog
+          confirmLabel="确认删除"
+          description={
+            getReceiptAllocatedAmount(pendingDeleteReceipt.id, props.allocations) > 0
+              ? "该收款已有分配记录。删除后将同步从客户收款池移除，并撤销相关收款分配，影响对应对账结果。"
+              : "删除后将同步从客户对账的收款池移除这笔记录。"
+          }
+          onCancel={() => setPendingDeleteReceipt(null)}
+          onConfirm={() => {
+            props.onDeleteReceipt(pendingDeleteReceipt.id);
+            setPendingDeleteReceipt(null);
+          }}
+          title="确认删除这笔收款？"
+          tone="danger"
         />
       )}
     </section>
@@ -3280,7 +3385,7 @@ function StatementItemModal(props: {
           />
         </Field>
         <Field label="款号" required>
-          <input disabled={!!props.item} onChange={(event) => setStyleNo(event.target.value)} placeholder="输入款号" value={styleNo} />
+          <input onChange={(event) => setStyleNo(event.target.value)} placeholder="输入款号" value={styleNo} />
         </Field>
         <Field label="应收金额">
           <input min="0" onChange={(event) => setAmount(event.target.value)} step="0.01" type="number" value={amount} />
@@ -3344,6 +3449,7 @@ type ReceiptPoolRow = {
   receiptDate: string;
   amount: string;
   method: PaymentMethod;
+  isLocked: boolean;
   transactionNo: string;
   note: string;
   createdAt?: string;
@@ -3365,6 +3471,7 @@ function ReceiptPoolModal(props: {
       receiptDate: receipt.receiptDate,
       amount: receipt.amount.toFixed(2),
       method: receipt.method,
+      isLocked: receipt.isLocked === true,
       transactionNo: receipt.transactionNo ?? "",
       note: receipt.note ?? "",
       createdAt: receipt.createdAt,
@@ -3373,6 +3480,11 @@ function ReceiptPoolModal(props: {
   const [deletedReceiptIds, setDeletedReceiptIds] = useState<string[]>([]);
   const [error, setError] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
+  const [pendingConfirmation, setPendingConfirmation] = useState<{
+    allocatedAmount?: number;
+    rowId: string;
+    type: "delete" | "unlock";
+  }>();
   const pageCount = Math.max(1, Math.ceil(rows.length / RECEIPT_POOL_PAGE_SIZE));
   const visibleRows = useMemo(
     () => rows.slice((currentPage - 1) * RECEIPT_POOL_PAGE_SIZE, currentPage * RECEIPT_POOL_PAGE_SIZE),
@@ -3396,6 +3508,7 @@ function ReceiptPoolModal(props: {
           receiptDate: getTodayString(),
           amount: "",
           method: "银行转账" as PaymentMethod,
+          isLocked: false,
           transactionNo: "",
           note: "",
           isNew: true,
@@ -3407,17 +3520,36 @@ function ReceiptPoolModal(props: {
   }
 
   function deleteRow(row: ReceiptPoolRow) {
+    if (row.isLocked) return;
     const allocatedAmount = getReceiptAllocatedAmount(row.id, props.allocations);
-    if (
-      allocatedAmount > 0 &&
-      !window.confirm("该收款已分配到对账单或款号，删除后会影响对账结果，是否确认删除？")
-    ) {
+    setPendingConfirmation({ allocatedAmount, rowId: row.id, type: "delete" });
+  }
+
+  function toggleRowLock(row: ReceiptPoolRow) {
+    if (row.isLocked) {
+      setPendingConfirmation({ rowId: row.id, type: "unlock" });
       return;
     }
-    setRows((currentRows) => currentRows.filter((item) => item.id !== row.id));
-    if (!row.isNew) {
-      setDeletedReceiptIds((currentIds) => [...currentIds, row.id]);
+    updateRow(row.id, { isLocked: true });
+  }
+
+  function confirmPendingAction() {
+    if (!pendingConfirmation) return;
+    const row = rows.find((item) => item.id === pendingConfirmation.rowId);
+    if (!row) {
+      setPendingConfirmation(undefined);
+      return;
     }
+
+    if (pendingConfirmation.type === "unlock") {
+      updateRow(row.id, { isLocked: false });
+    } else if (!row.isLocked) {
+      setRows((currentRows) => currentRows.filter((item) => item.id !== row.id));
+      if (!row.isNew) {
+        setDeletedReceiptIds((currentIds) => [...currentIds, row.id]);
+      }
+    }
+    setPendingConfirmation(undefined);
   }
 
   function saveRows() {
@@ -3450,6 +3582,7 @@ function ReceiptPoolModal(props: {
         receiptDate: row.receiptDate,
         amount,
         method: row.method,
+        isLocked: row.isLocked,
         transactionNo: row.transactionNo.trim(),
         note: row.note.trim(),
         createdAt: row.createdAt ?? today,
@@ -3462,7 +3595,8 @@ function ReceiptPoolModal(props: {
   }
 
   return (
-    <Modal onClose={props.onClose} size="receiptPool" title="收款池">
+    <>
+      <Modal onClose={props.onClose} size="receiptPool" title="收款池">
       <div className="receipt-pool">
         <div className="receipt-pool__customer">
           客户：<strong>{props.customer?.name ?? "未选择客户"}</strong>
@@ -3486,12 +3620,18 @@ function ReceiptPoolModal(props: {
                 const allocatedAmount = getReceiptAllocatedAmount(row.id, props.allocations);
                 const amount = parseMoney(row.amount);
                 return (
-                  <tr key={row.id}>
+                  <tr className={row.isLocked ? "is-locked" : undefined} key={row.id}>
                     <td>
-                      <input onChange={(event) => updateRow(row.id, { receiptDate: event.target.value })} type="date" value={row.receiptDate} />
+                      <input
+                        disabled={row.isLocked}
+                        onChange={(event) => updateRow(row.id, { receiptDate: event.target.value })}
+                        type="date"
+                        value={row.receiptDate}
+                      />
                     </td>
                     <td>
                       <input
+                        disabled={row.isLocked}
                         min="0"
                         onChange={(event) => updateRow(row.id, { amount: event.target.value })}
                         step="0.01"
@@ -3502,6 +3642,7 @@ function ReceiptPoolModal(props: {
                     <td>
                       <AnimatedSelect
                         ariaLabel="收款方式"
+                        disabled={row.isLocked}
                         onChange={(value) => updateRow(row.id, { method: value as PaymentMethod })}
                         options={toSelectOptions(paymentMethods)}
                         value={row.method}
@@ -3509,6 +3650,7 @@ function ReceiptPoolModal(props: {
                     </td>
                     <td>
                       <input
+                        disabled={row.isLocked}
                         onChange={(event) => updateRow(row.id, { transactionNo: event.target.value })}
                         placeholder="银行流水号/承兑编号"
                         value={row.transactionNo}
@@ -3521,15 +3663,29 @@ function ReceiptPoolModal(props: {
                       ¥ {formatMoney(amount - allocatedAmount)}
                     </td>
                     <td>
-                      <input onChange={(event) => updateRow(row.id, { note: event.target.value })} value={row.note} />
+                      <input disabled={row.isLocked} onChange={(event) => updateRow(row.id, { note: event.target.value })} value={row.note} />
                     </td>
                     <td>
                       <div className="receipt-pool-actions">
-                        <button className="recon-inline-action" type="button">
-                          编辑
+                        <button
+                          aria-label="删除收款"
+                          className="receipt-pool-icon-action is-delete"
+                          disabled={row.isLocked}
+                          onClick={() => deleteRow(row)}
+                          title={row.isLocked ? "该收款已锁定" : "删除收款"}
+                          type="button"
+                        >
+                          <Trash2 size={16} />
                         </button>
-                        <button className="recon-inline-action is-danger" onClick={() => deleteRow(row)} type="button">
-                          删除
+                        <button
+                          aria-label={row.isLocked ? "解锁收款" : "锁定收款"}
+                          aria-pressed={row.isLocked}
+                          className={`receipt-pool-icon-action ${row.isLocked ? "is-lock-closed" : "is-lock-open"}`}
+                          onClick={() => toggleRowLock(row)}
+                          title={row.isLocked ? "解锁收款" : "锁定收款"}
+                          type="button"
+                        >
+                          {row.isLocked ? <Lock size={16} /> : <LockOpen size={16} />}
                         </button>
                       </div>
                     </td>
@@ -3582,7 +3738,24 @@ function ReceiptPoolModal(props: {
           </button>
         </div>
       </div>
-    </Modal>
+      </Modal>
+      {pendingConfirmation && (
+        <ConfirmationDialog
+          confirmLabel={pendingConfirmation.type === "delete" ? "确认删除" : "确认解锁"}
+          description={
+            pendingConfirmation.type === "delete"
+              ? pendingConfirmation.allocatedAmount && pendingConfirmation.allocatedAmount > 0
+                ? "该收款已有分配记录，删除后会影响对账单和款号的收款结果。此操作将在保存收款池后生效。"
+                : "删除后将无法在收款池中找到这笔记录。此操作将在保存收款池后生效。"
+              : "解锁后，这笔收款可以继续修改或删除。"
+          }
+          onCancel={() => setPendingConfirmation(undefined)}
+          onConfirm={confirmPendingAction}
+          title={pendingConfirmation.type === "delete" ? "确认删除这笔收款？" : "确认解锁这笔收款？"}
+          tone={pendingConfirmation.type === "delete" ? "danger" : "primary"}
+        />
+      )}
+    </>
   );
 }
 
@@ -3919,6 +4092,41 @@ function Modal(props: { children: JSX.Element; onClose(): void; size?: "wide" | 
           </button>
         </div>
         {props.children}
+      </div>
+    </div>
+  );
+}
+
+function ConfirmationDialog(props: {
+  confirmLabel: string;
+  description: string;
+  onCancel(): void;
+  onConfirm(): void;
+  title: string;
+  tone: "danger" | "primary";
+}) {
+  return (
+    <div className="recon-confirm-backdrop" role="presentation">
+      <div aria-modal="true" className="recon-confirm-dialog" role="alertdialog">
+        <div className={`recon-confirm-dialog__icon is-${props.tone}`}>
+          {props.tone === "danger" ? <AlertTriangle size={22} /> : <LockOpen size={22} />}
+        </div>
+        <div className="recon-confirm-dialog__content">
+          <h3>{props.title}</h3>
+          <p>{props.description}</p>
+        </div>
+        <div className="recon-confirm-dialog__actions">
+          <button className="recon-button recon-button-light" onClick={props.onCancel} type="button">
+            取消
+          </button>
+          <button
+            className={`recon-button ${props.tone === "danger" ? "recon-button-danger" : "recon-button-primary"}`}
+            onClick={props.onConfirm}
+            type="button"
+          >
+            {props.confirmLabel}
+          </button>
+        </div>
       </div>
     </div>
   );

@@ -1211,6 +1211,25 @@
   color: #1e5b78;
 }
 
+.recon-row-actions button.is-danger-action {
+  color: #b42318;
+}
+
+.recon-row-actions button.is-allocation-action {
+  background: #eaf4f8;
+  color: #17627d;
+}
+
+.recon-row-actions button.is-allocation-action:hover {
+  background: #d8ebf2;
+  color: #104d63;
+}
+
+.recon-row-actions button:disabled {
+  opacity: 0.36;
+  cursor: not-allowed;
+}
+
 .recon-status-pills {
   display: inline-flex;
   flex-wrap: nowrap;
@@ -1526,41 +1545,36 @@
 }
 
 .recon-adjustment-card {
-  gap: 0;
-  padding: 10px 12px;
+  gap: 10px;
+  padding: 12px;
 }
 
 .recon-adjustment-card .recon-mini-card-head {
-  align-items: center;
+  align-items: flex-start;
 }
 
-.recon-adjustment-card-main {
-  display: grid;
-  grid-template-columns: minmax(78px, 0.8fr) minmax(104px, 1fr) minmax(0, 1.4fr);
-  gap: 12px;
-  align-items: center;
+.recon-adjustment-card-style {
+  flex: 1 1 auto;
   min-width: 0;
 }
 
-.recon-adjustment-card-main div {
-  min-width: 0;
-}
-
-.recon-adjustment-card-main span,
-.recon-adjustment-card-main strong {
-  display: inline;
-  margin: 0;
-}
-
-.recon-adjustment-card-main span {
-  margin-right: 6px;
-  color: #172033;
-  white-space: nowrap;
-}
-
-.recon-adjustment-card-main strong {
-  font-size: 14px;
+.recon-adjustment-card-style strong {
+  display: -webkit-box;
+  overflow: hidden;
   overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.recon-adjustment-card dl div {
+  grid-template-columns: 58px minmax(0, 1fr);
+}
+
+.recon-adjustment-card-description {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .recon-adjustment-total {
@@ -1736,6 +1750,78 @@
   cursor: pointer;
   font-size: 22px;
   line-height: 1;
+}
+
+.recon-confirm-backdrop {
+  position: fixed;
+  z-index: 80;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(9, 18, 31, 0.34);
+}
+
+.recon-confirm-dialog {
+  display: grid;
+  width: min(440px, calc(100vw - 40px));
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 14px;
+  padding: 22px;
+  border: 1px solid #dce5ee;
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 24px 72px rgba(9, 18, 31, 0.26);
+}
+
+.recon-confirm-dialog__icon {
+  display: grid;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border-radius: 8px;
+}
+
+.recon-confirm-dialog__icon.is-danger {
+  background: #fff0ef;
+  color: #b42318;
+}
+
+.recon-confirm-dialog__icon.is-primary {
+  background: #eaf5f8;
+  color: #17627d;
+}
+
+.recon-confirm-dialog__content h3 {
+  margin: 1px 0 7px;
+  color: #172033;
+  font-size: 17px;
+}
+
+.recon-confirm-dialog__content p {
+  margin: 0;
+  color: #68788d;
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.recon-confirm-dialog__actions {
+  display: flex;
+  grid-column: 1 / -1;
+  justify-content: flex-end;
+  gap: 10px;
+  padding-top: 6px;
+}
+
+.recon-button-danger {
+  border-color: #b42318;
+  background: #b42318;
+  color: #ffffff;
+}
+
+.recon-button-danger:hover {
+  border-color: #961c14;
+  background: #961c14;
 }
 
 .recon-form {
@@ -2046,6 +2132,18 @@
   font-size: 12px;
 }
 
+.receipt-pool-table tr.is-locked td {
+  background: #fffafa;
+}
+
+.receipt-pool-table input:disabled,
+.receipt-pool-table tr.is-locked .animated-select-trigger:disabled {
+  border-color: #e5e9ef;
+  background: #f3f5f8;
+  color: #8995a5;
+  cursor: not-allowed;
+}
+
 .receipt-pool-table th:nth-child(1),
 .receipt-pool-table td:nth-child(1) {
   min-width: 145px;
@@ -2085,13 +2183,56 @@
 
 .receipt-pool-table th:nth-child(8),
 .receipt-pool-table td:nth-child(8) {
-  min-width: 110px;
+  min-width: 92px;
 }
 
 .receipt-pool-actions {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   white-space: nowrap;
+}
+
+.receipt-pool-icon-action {
+  display: inline-grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border: 1px solid #d7e0ea;
+  border-radius: 6px;
+  background: #f2f6f9;
+  color: #405169;
+  cursor: pointer;
+}
+
+.receipt-pool-icon-action:hover:not(:disabled) {
+  border-color: #8eb0c8;
+  background: #e8f2f8;
+}
+
+.receipt-pool-icon-action.is-delete {
+  color: #b42318;
+}
+
+.receipt-pool-icon-action.is-lock-open {
+  border-color: #b8dfca;
+  background: #edf9f2;
+  color: #087443;
+}
+
+.receipt-pool-icon-action.is-lock-closed {
+  border-color: #efb8b3;
+  background: #fff0ef;
+  color: #c01f16;
+}
+
+.receipt-pool-icon-action:disabled {
+  opacity: 0.36;
+  cursor: not-allowed;
+}
+
+.recon-inline-action:disabled {
+  color: #9aa6b4;
+  cursor: not-allowed;
 }
 
 .recon-action-separator {

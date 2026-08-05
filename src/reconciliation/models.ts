@@ -121,6 +121,7 @@ export type CustomerReceipt = {
   receiptDate: string;
   amount: number;
   method: PaymentMethod;
+  isLocked?: boolean;
   transactionNo?: string;
   periodMonth?: string;
   note?: string;

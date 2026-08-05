@@ -239,6 +239,7 @@ function normalizeStore(store: ReconciliationStore): ReconciliationStore {
     }),
     customerReceipts: store.customerReceipts.map((receipt) => ({
       ...receipt,
+      isLocked: receipt.isLocked === true,
       createdAt: receipt.createdAt ?? now,
       updatedAt: receipt.updatedAt ?? now,
     })),
