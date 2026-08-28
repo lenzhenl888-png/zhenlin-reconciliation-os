@@ -647,6 +647,72 @@
   background: linear-gradient(to top, #ffffff, rgba(255, 255, 255, 0));
 }
 
+.searchable-select {
+  min-width: 0;
+}
+
+.searchable-select .animated-select-trigger span.is-placeholder {
+  color: #8d9bab;
+}
+
+.searchable-select .animated-select-trigger {
+  cursor: text;
+  gap: 8px;
+}
+
+.searchable-select .animated-select-trigger svg:last-of-type {
+  cursor: pointer;
+}
+
+.searchable-select.is-open .animated-select-trigger svg:first-of-type {
+  transform: none;
+}
+
+.searchable-select-icon {
+  flex: 0 0 auto;
+  color: #64748b;
+}
+
+.searchable-select .searchable-select-input {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  min-height: 0;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+  box-shadow: none;
+  appearance: none;
+  -webkit-appearance: none;
+  color: #172033;
+  font-family: inherit;
+  font-size: inherit;
+  font-weight: 800;
+  outline: none;
+  text-overflow: ellipsis;
+}
+
+.searchable-select-input::placeholder {
+  color: #8d9bab;
+}
+
+.searchable-select-input:disabled {
+  cursor: not-allowed;
+}
+
+.searchable-select-list {
+  padding-top: 8px;
+}
+
+.searchable-select-empty {
+  padding: 14px 12px;
+  color: #8d9bab;
+  font-size: 13px;
+  font-weight: 700;
+  text-align: center;
+}
+
 .recon-field em {
   margin-left: 3px;
   color: #b42318;
@@ -1742,6 +1808,17 @@ body.is-column-resizing * {
   font-size: 14px;
 }
 
+.recon-table.recon-table-stable {
+  table-layout: fixed;
+}
+
+.recon-table-stable th,
+.recon-table-stable td {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .records-fill-page::after {
   display: block;
   flex: 1 1 auto;
@@ -2562,6 +2639,39 @@ body.is-column-resizing * {
   min-height: 38px;
   padding: 8px 11px;
   font-size: 14px;
+}
+
+.module-filter-grid > button {
+  justify-self: start;
+}
+
+.module-filter-grid-wide {
+  grid-template-columns: minmax(150px, 180px) auto auto auto;
+  justify-content: start;
+}
+
+.module-filter-range {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+
+.module-filter-range .animated-select {
+  flex: 0 0 128px;
+  min-width: 0;
+  width: 128px;
+}
+
+.module-filter-grid-wide label:nth-of-type(3) {
+  width: 160px;
+}
+
+.module-filter-range-sep {
+  flex: 0 0 auto;
+  color: #546275;
+  font-size: 12px;
+  font-weight: 800;
 }
 
 .recon-table tfoot td {

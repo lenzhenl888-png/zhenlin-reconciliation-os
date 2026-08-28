@@ -31,6 +31,7 @@ import {
 import { createId } from "../utils/id";
 import { useAuth } from "../auth/AuthContext";
 import { AnimatedSelect } from "../components/common/AnimatedSelect";
+import { SearchableSelect } from "../components/common/SearchableSelect";
 import { ClickSpark } from "../components/common/ClickSpark";
 import { Particles } from "../components/common/Particles";
 import type {
@@ -2699,16 +2700,29 @@ function ProfileSelect<TValue extends string>(props: {
   );
 }
 
+function formatPeriodLabel(period: string) {
+  const [year, month] = period.split("-");
+  if (!month) return period;
+  return `${year}年${Number(month)}月`;
+}
+
 function OverviewModule(props: { customers: Customer[]; store: Parameters<typeof summarizeAll>[1]; summary: ReturnType<typeof summarizeAll> }) {
   const [customerId, setCustomerId] = useState("");
-  const [periodMonth, setPeriodMonth] = useState("");
+  const periodRange = getAvailablePeriods(props.store);
+  const [periodFrom, setPeriodFrom] = useState(periodRange[periodRange.length - 1] ?? "");
+  const [periodTo, setPeriodTo] = useState(periodRange[0] ?? "");
   const [status, setStatus] = useState<StatementStatus | "">("");
   const periodOptions = getAvailablePeriods(props.store);
+  const orderedPeriods = [...periodOptions].sort();
+  const effectiveFrom = periodFrom || orderedPeriods[0] || "";
+  const effectiveTo = periodTo || orderedPeriods[orderedPeriods.length - 1] || "";
   const statementSummaries = props.store.monthlyStatements
     .map((statement) => summarizeStatement(statement, props.store))
     .filter((summary) => {
       const matchesCustomer = !customerId || summary.statement.customerId === customerId;
-      const matchesPeriod = !periodMonth || summary.statement.periodMonth === periodMonth;
+      const matchesPeriod =
+        (!effectiveFrom || summary.statement.periodMonth >= effectiveFrom) &&
+        (!effectiveTo || summary.statement.periodMonth <= effectiveTo);
       const matchesStatus = !status || summary.status === status;
       return matchesCustomer && matchesPeriod && matchesStatus;
     });
@@ -2734,24 +2748,41 @@ function OverviewModule(props: { customers: Customer[]; store: Parameters<typeof
             <strong>{overviewHeaderTitle}</strong>
           </div>
         </div>
-        <div className="module-filter-grid">
+        <div className="module-filter-grid module-filter-grid-wide">
           <label>
             客户
-            <AnimatedSelect
+            <SearchableSelect
               ariaLabel="客户"
+              emptyText="无匹配客户"
               onChange={setCustomerId}
               options={[{ label: "全部客户", value: "" }, ...props.customers.map((customer) => ({ label: customer.name, value: customer.id }))]}
+              placeholder="全部客户"
               value={customerId}
             />
           </label>
           <label>
             对账月份
-            <AnimatedSelect
-              ariaLabel="对账月份"
-              onChange={setPeriodMonth}
-              options={[{ label: "全部月份", value: "" }, ...toSelectOptions(periodOptions)]}
-              value={periodMonth}
-            />
+            <div className="module-filter-range">
+              <AnimatedSelect
+                ariaLabel="起始月份"
+                onChange={(value) => {
+                  setPeriodFrom(value);
+                  if (effectiveTo && value > effectiveTo) setPeriodTo(value);
+                }}
+                options={orderedPeriods.map((period) => ({ label: formatPeriodLabel(period), value: period }))}
+                value={effectiveFrom}
+              />
+              <span className="module-filter-range-sep">至</span>
+              <AnimatedSelect
+                ariaLabel="截止月份"
+                onChange={(value) => {
+                  setPeriodTo(value);
+                  if (effectiveFrom && value < effectiveFrom) setPeriodFrom(value);
+                }}
+                options={orderedPeriods.map((period) => ({ label: formatPeriodLabel(period), value: period }))}
+                value={effectiveTo}
+              />
+            </div>
           </label>
           <label>
             状态
@@ -2766,7 +2797,8 @@ function OverviewModule(props: { customers: Customer[]; store: Parameters<typeof
             className="recon-button recon-button-light"
             onClick={() => {
               setCustomerId("");
-              setPeriodMonth("");
+              setPeriodFrom(orderedPeriods[0] ?? "");
+              setPeriodTo(orderedPeriods[orderedPeriods.length - 1] ?? "");
               setStatus("");
             }}
             type="button"
@@ -2774,7 +2806,17 @@ function OverviewModule(props: { customers: Customer[]; store: Parameters<typeof
             重置
           </button>
         </div>
-        <table className="recon-table">
+        <table className="recon-table recon-table-stable">
+          <colgroup>
+            <col style={{ width: "18%" }} />
+            <col style={{ width: "11%" }} />
+            <col style={{ width: "8%" }} />
+            <col style={{ width: "10%" }} />
+            <col style={{ width: "14%" }} />
+            <col style={{ width: "13%" }} />
+            <col style={{ width: "13%" }} />
+            <col style={{ width: "13%" }} />
+          </colgroup>
           <thead>
             <tr>
               <th>客户</th>
@@ -2880,10 +2922,12 @@ function ReceiptPoolModule(props: {
       <div className="module-filter-grid">
         <label>
           客户
-          <AnimatedSelect
+          <SearchableSelect
             ariaLabel="客户"
+            emptyText="无匹配客户"
             onChange={setSelectedCustomerId}
             options={[{ label: "全部客户", value: "" }, ...props.customers.map((customer) => ({ label: getReceiptCustomerName(customer.id), value: customer.id }))]}
+            placeholder="全部客户"
             value={selectedCustomerId}
           />
         </label>
@@ -2912,7 +2956,18 @@ function ReceiptPoolModule(props: {
           重置
         </button>
       </div>
-      <table className="recon-table">
+      <table className="recon-table recon-table-stable">
+        <colgroup>
+          <col style={{ width: "12%" }} />
+          <col style={{ width: "12%" }} />
+          <col style={{ width: "14%" }} />
+          <col style={{ width: "12%" }} />
+          <col style={{ width: "12%" }} />
+          <col style={{ width: "10%" }} />
+          <col style={{ width: "12%" }} />
+          <col style={{ width: "9%" }} />
+          <col style={{ width: "7%" }} />
+        </colgroup>
         <thead>
           <tr>
             <th>客户</th>
@@ -3239,10 +3294,12 @@ function InvoiceRecordsModule(props: {
       <div className="module-filter-grid">
         <label>
           客户
-          <AnimatedSelect
+          <SearchableSelect
             ariaLabel="客户"
+            emptyText="无匹配客户"
             onChange={setCustomerId}
             options={[{ label: "全部客户", value: "" }, ...props.customers.map((customer) => ({ label: customer.name, value: customer.id }))]}
+            placeholder="全部客户"
             value={customerId}
           />
         </label>
@@ -3276,7 +3333,15 @@ function InvoiceRecordsModule(props: {
           重置
         </button>
       </div>
-      <table className="recon-table">
+      <table className="recon-table recon-table-stable">
+        <colgroup>
+          <col style={{ width: "17%" }} />
+          <col style={{ width: "19%" }} />
+          <col style={{ width: "15%" }} />
+          <col style={{ width: "19%" }} />
+          <col style={{ width: "16%" }} />
+          <col style={{ width: "14%" }} />
+        </colgroup>
         <thead>
           <tr>
             <th>客户</th>
@@ -3592,7 +3657,10 @@ function ReceiptPoolModal(props: {
   const [allocationReceiptId, setAllocationReceiptId] = useState<string>();
   const pageCount = Math.max(1, Math.ceil(rows.length / RECEIPT_POOL_PAGE_SIZE));
   const visibleRows = useMemo(
-    () => rows.slice((currentPage - 1) * RECEIPT_POOL_PAGE_SIZE, currentPage * RECEIPT_POOL_PAGE_SIZE),
+    () =>
+      [...rows]
+        .sort((left, right) => left.receiptDate.localeCompare(right.receiptDate))
+        .slice((currentPage - 1) * RECEIPT_POOL_PAGE_SIZE, currentPage * RECEIPT_POOL_PAGE_SIZE),
     [currentPage, rows],
   );
 
@@ -3928,7 +3996,10 @@ function InvoicePoolModal(props: {
   const [allocationInvoiceId, setAllocationInvoiceId] = useState<string>();
   const pageCount = Math.max(1, Math.ceil(rows.length / RECEIPT_POOL_PAGE_SIZE));
   const visibleRows = useMemo(
-    () => rows.slice((currentPage - 1) * RECEIPT_POOL_PAGE_SIZE, currentPage * RECEIPT_POOL_PAGE_SIZE),
+    () =>
+      [...rows]
+        .sort((left, right) => left.invoiceDate.localeCompare(right.invoiceDate))
+        .slice((currentPage - 1) * RECEIPT_POOL_PAGE_SIZE, currentPage * RECEIPT_POOL_PAGE_SIZE),
     [currentPage, rows],
   );
 
