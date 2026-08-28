@@ -379,4 +379,6 @@ export const seedReconciliationStore: ReconciliationStore = {
       note: "全额分配",
     },
   ],
+  customerInvoices: [],
+  invoiceAllocations: [],
 };

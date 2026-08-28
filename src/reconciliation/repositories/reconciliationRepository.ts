@@ -44,11 +44,13 @@ function createEmptyStore(): ReconciliationStore {
     statementAdjustments: [],
     customerReceipts: [],
     receiptAllocations: [],
+    customerInvoices: [],
+    invoiceAllocations: [],
   };
 }
 
 function createInitialStore(): ReconciliationStore {
-  return USE_EMPTY_INITIAL_DATA ? createEmptyStore() : cloneStore(seedReconciliationStore);
+  return normalizeStore(USE_EMPTY_INITIAL_DATA ? createEmptyStore() : cloneStore(seedReconciliationStore));
 }
 
 function shouldResetStoredDataForBuild(): boolean {
@@ -70,7 +72,9 @@ function hasBusinessData(store: ReconciliationStore) {
     store.statementItems.length > 0 ||
     store.statementAdjustments.length > 0 ||
     store.customerReceipts.length > 0 ||
-    store.receiptAllocations.length > 0
+    store.receiptAllocations.length > 0 ||
+    (store.customerInvoices?.length ?? 0) > 0 ||
+    (store.invoiceAllocations?.length ?? 0) > 0
   );
 }
 
@@ -83,7 +87,9 @@ function isFullStore(store: Partial<ReconciliationStore>): store is Reconciliati
     Array.isArray(store.statementItems) &&
     (store.statementAdjustments === undefined || Array.isArray(store.statementAdjustments)) &&
     Array.isArray(store.customerReceipts) &&
-    Array.isArray(store.receiptAllocations)
+    Array.isArray(store.receiptAllocations) &&
+    (store.customerInvoices === undefined || Array.isArray(store.customerInvoices)) &&
+    (store.invoiceAllocations === undefined || Array.isArray(store.invoiceAllocations))
   );
 }
 
@@ -128,6 +134,8 @@ function migrateLegacyStore(store: Partial<ReconciliationStore>): Reconciliation
   const statementAdjustments: StatementAdjustment[] = [];
   const customerReceipts: CustomerReceipt[] = [];
   const receiptAllocations: ReceiptAllocation[] = [];
+  const customerInvoices: import("../models").CustomerInvoice[] = [];
+  const invoiceAllocations: import("../models").InvoiceAllocation[] = [];
   const now = new Date().toISOString().slice(0, 10);
 
   customers.forEach((customer) => {
@@ -204,6 +212,8 @@ function migrateLegacyStore(store: Partial<ReconciliationStore>): Reconciliation
     statementAdjustments,
     customerReceipts,
     receiptAllocations,
+    customerInvoices,
+    invoiceAllocations,
   };
 }
 
@@ -220,6 +230,47 @@ function normalizeStore(store: ReconciliationStore): ReconciliationStore {
     ...store.customers.filter((customer) => !profileIds.has(customer.id)).map((customer) => createProfileFromCustomer(customer, now)),
   ];
   const profileById = new Map(customerProfiles.map((profile) => [profile.id, profile]));
+
+  const existingInvoices = Array.isArray(store.customerInvoices) ? store.customerInvoices : [];
+  const existingInvoiceIds = new Set(existingInvoices.map((invoice) => invoice.id));
+  const existingAllocations = Array.isArray(store.invoiceAllocations) ? store.invoiceAllocations : [];
+  const existingAllocationIds = new Set(existingAllocations.map((allocation) => allocation.id));
+  const migratedInvoices = [...existingInvoices];
+  const migratedAllocations = [...existingAllocations];
+
+  for (const account of store.styleAccounts) {
+    for (const record of account.invoiceRecords ?? []) {
+      const invoiceId = `legacy-invoice-${record.id}`;
+      const allocationId = `legacy-invoice-allocation-${record.id}`;
+      if (!existingInvoiceIds.has(invoiceId)) {
+        migratedInvoices.push({
+          id: invoiceId,
+          customerId: account.customerId,
+          invoiceDate: record.date,
+          invoiceNo: record.invoiceNo,
+          amount: record.amount,
+          isLocked: false,
+          note: record.remark,
+          createdAt: now,
+          updatedAt: now,
+        });
+      }
+      const statement = store.monthlyStatements.find(
+        (item) => item.customerId === account.customerId && item.periodMonth === record.date.slice(0, 7),
+      );
+      if (statement && !existingAllocationIds.has(allocationId)) {
+        migratedAllocations.push({
+          id: allocationId,
+          invoiceId,
+          customerId: account.customerId,
+          statementId: statement.id,
+          styleAccountId: account.id,
+          allocatedAmount: record.amount,
+          note: "历史款号开票记录",
+        });
+      }
+    }
+  }
 
   return {
     ...store,
@@ -243,6 +294,13 @@ function normalizeStore(store: ReconciliationStore): ReconciliationStore {
       createdAt: receipt.createdAt ?? now,
       updatedAt: receipt.updatedAt ?? now,
     })),
+    customerInvoices: migratedInvoices.map((invoice) => ({
+      ...invoice,
+      isLocked: invoice.isLocked === true,
+      createdAt: invoice.createdAt ?? now,
+      updatedAt: invoice.updatedAt ?? now,
+    })),
+    invoiceAllocations: migratedAllocations,
   };
 }
 
@@ -262,7 +320,7 @@ export const reconciliationRepository: ReconciliationRepository = {
 
       const legacyStore = window.localStorage.getItem(LEGACY_STORAGE_KEY);
       if (legacyStore) {
-        const migratedStore = migrateLegacyStore(JSON.parse(legacyStore) as Partial<ReconciliationStore>);
+        const migratedStore = normalizeStore(migrateLegacyStore(JSON.parse(legacyStore) as Partial<ReconciliationStore>));
         this.save(migratedStore);
         return migratedStore;
       }

@@ -1071,6 +1071,63 @@
   table-layout: fixed;
 }
 
+.recon-style-table th,
+.recon-style-table td {
+  position: relative;
+  border-right: 1px solid #dce4ed;
+}
+
+.recon-style-table th:last-child,
+.recon-style-table td:last-child {
+  border-right: 0;
+}
+
+.recon-style-table th {
+  text-align: center;
+}
+
+.recon-style-table th > span {
+  display: block;
+  overflow: hidden;
+  padding: 0 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recon-column-resizer {
+  position: absolute;
+  z-index: 1;
+  top: 0;
+  right: -5px;
+  width: 10px;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: col-resize;
+}
+
+.recon-column-resizer::after {
+  position: absolute;
+  top: 8px;
+  bottom: 8px;
+  left: 50%;
+  width: 1px;
+  background: #bdcad8;
+  content: "";
+}
+
+.recon-column-resizer:hover::after {
+  width: 2px;
+  background: #1e5b78;
+}
+
+body.is-column-resizing,
+body.is-column-resizing * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
 .recon-style-table th:first-child,
 .recon-style-table td:first-child {
   width: 12%;
@@ -2211,6 +2268,49 @@
 
 .receipt-pool-icon-action.is-delete {
   color: #b42318;
+}
+
+.receipt-pool-icon-action.is-allocate {
+  border-color: #b9d8e7;
+  background: #edf7fb;
+  color: #17627d;
+}
+
+.invoice-pool-table {
+  min-width: 1240px;
+}
+
+.invoice-pool-table th:nth-child(1),
+.invoice-pool-table td:nth-child(1) {
+  min-width: 145px;
+}
+
+.invoice-pool-table th:nth-child(2),
+.invoice-pool-table td:nth-child(2) {
+  min-width: 220px;
+}
+
+.invoice-pool-table th:nth-child(3),
+.invoice-pool-table td:nth-child(3) {
+  min-width: 150px;
+}
+
+.invoice-pool-table th:nth-child(4),
+.invoice-pool-table td:nth-child(4),
+.invoice-pool-table th:nth-child(5),
+.invoice-pool-table td:nth-child(5) {
+  min-width: 150px;
+  white-space: nowrap;
+}
+
+.invoice-pool-table th:nth-child(6),
+.invoice-pool-table td:nth-child(6) {
+  min-width: 210px;
+}
+
+.invoice-pool-table th:nth-child(7),
+.invoice-pool-table td:nth-child(7) {
+  min-width: 126px;
 }
 
 .receipt-pool-icon-action.is-lock-open {

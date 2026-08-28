@@ -10,6 +10,8 @@ const storeKeys = [
   "statementAdjustments",
   "customerReceipts",
   "receiptAllocations",
+  "customerInvoices",
+  "invoiceAllocations",
 ];
 
 function resolveStorePath() {

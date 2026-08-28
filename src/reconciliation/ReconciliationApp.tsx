@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent, type PointerEvent as ReactPointerEvent } from "react";
 import {
   AlertTriangle,
   Banknote,
@@ -37,11 +37,13 @@ import type {
   AccountStatus,
   AdjustmentDirection,
   Customer,
+  CustomerInvoice,
   CustomerProfile,
   CustomerProfileStatus,
   CustomerType,
   CustomerReceipt,
   InvoiceRecord,
+  InvoiceAllocation,
   MonthlyStatement,
   PaymentMethod,
   ReceiptAllocation,
@@ -74,6 +76,7 @@ import {
   getCustomerProfile,
   getDefaultOpeningBalance,
   getAdjustmentSignedAmount,
+  getInvoiceAllocatedAmount,
   getReceiptAllocatedAmount,
   parseMoney,
   roundMoney,
@@ -91,9 +94,10 @@ type ModalState =
   | { type: "customer"; customer?: Customer }
   | { type: "statement"; customerId?: string }
   | { type: "statementItem"; item?: StatementItem; customerId: string; statementId: string }
-  | { type: "invoice"; accountId: string; statementPeriod: string; record?: InvoiceRecord }
   | { type: "receiptPool"; customerId: string }
-  | { type: "allocation"; customerId: string; statementId?: string }
+  | { type: "invoicePool"; customerId: string }
+  | { type: "allocation"; customerId: string; receiptId?: string; returnToPool?: boolean; statementId?: string }
+  | { type: "invoiceAllocation"; customerId: string; invoiceId?: string; returnToPool?: boolean; statementId?: string }
   | { type: "statementPreview" }
   | null;
 
@@ -138,6 +142,7 @@ export function ReconciliationApp() {
   const [draftFilters, setDraftFilters] = useState<Filters>(emptyFilters);
   const [modal, setModal] = useState<ModalState>(null);
   const [pendingAdjustmentDeleteId, setPendingAdjustmentDeleteId] = useState<string>();
+  const [pendingInvoiceAllocationDeleteId, setPendingInvoiceAllocationDeleteId] = useState<string>();
   const [pendingStatementItemDeleteId, setPendingStatementItemDeleteId] = useState<string>();
   const [cloudStatus, setCloudStatus] = useState<CloudStatus>("loading");
   const [cloudNotice, setCloudNotice] = useState("正在同步云端数据...");
@@ -723,32 +728,17 @@ export function ReconciliationApp() {
     setPendingAdjustmentDeleteId(undefined);
   }
 
-  function upsertInvoice(accountId: string, record: InvoiceRecord) {
+  function saveInvoicePool(customerId: string, invoices: CustomerInvoice[], deletedInvoiceIds: string[]) {
+    const deletedIds = new Set(deletedInvoiceIds);
     updateStore((currentStore) => ({
       ...currentStore,
-      styleAccounts: currentStore.styleAccounts.map((account) =>
-        account.id === accountId
-          ? {
-              ...account,
-              invoiceRecords: account.invoiceRecords.some((item) => item.id === record.id)
-                ? account.invoiceRecords.map((item) => (item.id === record.id ? record : item))
-                : [record, ...account.invoiceRecords],
-              updatedAt: getTodayString(),
-            }
-          : account,
-      ),
-    }));
-  }
-
-  function deleteInvoice(accountId: string, invoiceId: string) {
-    if (!window.confirm("确认删除这条开票记录吗？")) return;
-    updateStore((currentStore) => ({
-      ...currentStore,
-      styleAccounts: currentStore.styleAccounts.map((account) =>
-        account.id === accountId
-          ? { ...account, invoiceRecords: account.invoiceRecords.filter((record) => record.id !== invoiceId) }
-          : account,
-      ),
+      customerInvoices: [
+        ...invoices,
+        ...(currentStore.customerInvoices ?? []).filter(
+          (invoice) => invoice.customerId !== customerId && !deletedIds.has(invoice.id),
+        ),
+      ],
+      invoiceAllocations: (currentStore.invoiceAllocations ?? []).filter((allocation) => !deletedIds.has(allocation.invoiceId)),
     }));
   }
 
@@ -914,20 +904,16 @@ export function ReconciliationApp() {
         return matched.length === 1 ? matched[0] : undefined;
       }
 
-      const nextStyleAccounts = currentStore.styleAccounts.map((account) => ({
-        ...account,
-        invoiceRecords: [...account.invoiceRecords],
-      }));
+      const nextInvoices = [...(currentStore.customerInvoices ?? [])];
+      const nextAllocations = [...(currentStore.invoiceAllocations ?? [])];
 
-      function isDuplicate(record: InvoiceRecord) {
-        const invoiceNo = normalize(record.invoiceNo);
-        return nextStyleAccounts.some((account) =>
-          account.invoiceRecords.some((item) => {
-            const existingInvoiceNo = normalize(item.invoiceNo);
-            if (invoiceNo && existingInvoiceNo === invoiceNo) return true;
-            return !invoiceNo && item.date === record.date && item.amount === record.amount && existingInvoiceNo === invoiceNo;
-          }),
-        );
+      function isDuplicate(invoice: CustomerInvoice) {
+        const invoiceNo = normalize(invoice.invoiceNo);
+        return nextInvoices.some((item) => {
+          const existingInvoiceNo = normalize(item.invoiceNo);
+          if (invoiceNo && existingInvoiceNo === invoiceNo) return true;
+          return !invoiceNo && item.customerId === invoice.customerId && item.invoiceDate === invoice.invoiceDate && item.amount === invoice.amount;
+        });
       }
 
       rows.forEach((row) => {
@@ -939,33 +925,47 @@ export function ReconciliationApp() {
         }
 
         const targetAccount = findStyleAccount(customerId, row.styleNo);
-        if (!targetAccount) {
-          skippedCount += 1;
-          warnings.push(`第 ${row.sourceRow} 行款号“${row.styleNo || "空"}”未匹配到该客户下唯一款号，已跳过。`);
-          return;
-        }
-
-        const record: InvoiceRecord = {
+        const invoice: CustomerInvoice = {
           id: createId("invoice"),
-          date: row.invoiceDate,
+          customerId,
+          invoiceDate: row.invoiceDate,
           invoiceNo: row.invoiceNo,
           amount: roundMoney(row.amount),
-          remark: row.note,
+          isLocked: false,
+          note: row.note,
+          createdAt: getTodayString(),
+          updatedAt: getTodayString(),
         };
 
-        if (isDuplicate(record)) {
+        if (isDuplicate(invoice)) {
           duplicatedCount += 1;
           return;
         }
 
-        const account = nextStyleAccounts.find((item) => item.id === targetAccount.id);
-        account?.invoiceRecords.unshift(record);
+        nextInvoices.unshift(invoice);
+        const targetStatement = currentStore.monthlyStatements.find(
+          (statement) => statement.customerId === customerId && statement.periodMonth === row.invoiceDate.slice(0, 7),
+        );
+        if (targetAccount && targetStatement) {
+          nextAllocations.unshift({
+            id: createId("invoice-alloc"),
+            invoiceId: invoice.id,
+            customerId,
+            statementId: targetStatement.id,
+            styleAccountId: targetAccount.id,
+            allocatedAmount: invoice.amount,
+            note: row.note || "按导入款号自动分配",
+          });
+        } else if (row.styleNo) {
+          warnings.push(`第 ${row.sourceRow} 行款号“${row.styleNo}”未匹配到对应月度单，已导入开票池，待手动分配。`);
+        }
         addedCount += 1;
       });
 
       return {
         ...currentStore,
-        styleAccounts: nextStyleAccounts,
+        customerInvoices: nextInvoices,
+        invoiceAllocations: nextAllocations,
       };
     });
 
@@ -982,12 +982,36 @@ export function ReconciliationApp() {
     }));
   }
 
+  function createInvoiceAllocation(values: InvoiceAllocation | InvoiceAllocation[]) {
+    const nextAllocations = Array.isArray(values) ? values : [values];
+    if (nextAllocations.length === 0) return;
+    updateStore((currentStore) => ({
+      ...currentStore,
+      invoiceAllocations: [...nextAllocations, ...(currentStore.invoiceAllocations ?? [])],
+    }));
+  }
+
   function deleteAllocation(allocationId: string) {
     if (!window.confirm("确认删除这条收款分配吗？")) return;
     updateStore((currentStore) => ({
       ...currentStore,
       receiptAllocations: currentStore.receiptAllocations.filter((allocation) => allocation.id !== allocationId),
     }));
+  }
+
+  function deleteInvoiceAllocation(allocationId: string) {
+    setPendingInvoiceAllocationDeleteId(allocationId);
+  }
+
+  function confirmDeleteInvoiceAllocation() {
+    if (!pendingInvoiceAllocationDeleteId) return;
+    updateStore((currentStore) => ({
+      ...currentStore,
+      invoiceAllocations: (currentStore.invoiceAllocations ?? []).filter(
+        (allocation) => allocation.id !== pendingInvoiceAllocationDeleteId,
+      ),
+    }));
+    setPendingInvoiceAllocationDeleteId(undefined);
   }
 
   function exportCurrentStatementWord() {
@@ -1234,24 +1258,18 @@ export function ReconciliationApp() {
             detailTab={detailTab}
             draftFilters={draftFilters}
             filteredItems={filteredItems}
-            onAddAllocation={() => selectedCustomerId && setModal({ type: "allocation", customerId: selectedCustomerId, statementId: selectedStatement?.id })}
-            onAddInvoice={(accountId) =>
-              setModal({ type: "invoice", accountId, statementPeriod: selectedStatement?.periodMonth ?? selectedPeriod })
-            }
             onAddItem={() =>
               selectedStatement &&
               setModal({ type: "statementItem", customerId: selectedStatement.customerId, statementId: selectedStatement.id })
             }
             onAddStatement={() => setModal({ type: "statement", customerId: selectedCustomerId })}
             onOpenReceiptPool={() => selectedCustomerId && setModal({ type: "receiptPool", customerId: selectedCustomerId })}
+            onOpenInvoicePool={() => selectedCustomerId && setModal({ type: "invoicePool", customerId: selectedCustomerId })}
             onApplyFilters={() => setFilters(draftFilters)}
             onDeleteAllocation={deleteAllocation}
             onDeleteAdjustment={deleteStatementAdjustment}
-            onDeleteInvoice={deleteInvoice}
+            onDeleteInvoiceAllocation={deleteInvoiceAllocation}
             onDeleteItem={deleteStatementItem}
-            onEditInvoice={(accountId, record) =>
-              setModal({ type: "invoice", accountId, statementPeriod: selectedStatement?.periodMonth ?? selectedPeriod, record })
-            }
             onEditItem={(item) =>
               selectedStatement && setModal({ type: "statementItem", item, customerId: selectedStatement.customerId, statementId: selectedStatement.id })
             }
@@ -1279,6 +1297,8 @@ export function ReconciliationApp() {
             periods={periods}
             receipts={store.customerReceipts}
             receiptAllocations={store.receiptAllocations}
+            customerInvoices={store.customerInvoices ?? []}
+            invoiceAllocations={store.invoiceAllocations ?? []}
             selectedAccount={selectedAccount}
             selectedCustomer={selectedCustomer}
             selectedCustomerName={selectedCustomerName}
@@ -1316,7 +1336,15 @@ export function ReconciliationApp() {
             receipts={store.customerReceipts}
           />
         )}
-        {activeModule === "invoices" && <InvoiceRecordsModule customers={store.customers} onImport={importInvoices} styleAccounts={store.styleAccounts} />}
+        {activeModule === "invoices" && (
+          <InvoiceRecordsModule
+            customers={store.customers}
+            invoices={store.customerInvoices ?? []}
+            invoiceAllocations={store.invoiceAllocations ?? []}
+            onImport={importInvoices}
+            styleAccounts={store.styleAccounts}
+          />
+        )}
         {activeModule === "settings" && <SettingsModule />}
       </main>
 
@@ -1356,25 +1384,32 @@ export function ReconciliationApp() {
           }}
         />
       )}
-      {modal?.type === "invoice" && (
-        <InvoiceModal
-          periodMonth={modal.statementPeriod}
-          record={modal.record}
-          onClose={() => setModal(null)}
-          onSubmit={(record) => {
-            upsertInvoice(modal.accountId, record);
-            setModal(null);
-          }}
-        />
-      )}
       {modal?.type === "receiptPool" && (
         <ReceiptPoolModal
           allocations={store.receiptAllocations}
           customer={store.customers.find((item) => item.id === modal.customerId)}
           receipts={store.customerReceipts.filter((receipt) => receipt.customerId === modal.customerId)}
+          statements={store.monthlyStatements}
+          store={store}
           onClose={() => setModal(null)}
+          onSubmitAllocation={createAllocation}
           onSave={(receipts, deletedReceiptIds) => {
             saveReceiptPool(modal.customerId, receipts, deletedReceiptIds);
+            setModal(null);
+          }}
+        />
+      )}
+      {modal?.type === "invoicePool" && (
+        <InvoicePoolModal
+          allocations={store.invoiceAllocations ?? []}
+          customer={store.customers.find((item) => item.id === modal.customerId)}
+          invoices={(store.customerInvoices ?? []).filter((invoice) => invoice.customerId === modal.customerId)}
+          statements={store.monthlyStatements}
+          store={store}
+          onClose={() => setModal(null)}
+          onSubmitAllocation={createInvoiceAllocation}
+          onSave={(invoices, deletedInvoiceIds) => {
+            saveInvoicePool(modal.customerId, invoices, deletedInvoiceIds);
             setModal(null);
           }}
         />
@@ -1382,15 +1417,32 @@ export function ReconciliationApp() {
       {modal?.type === "allocation" && (
         <AllocationModal
           customerId={modal.customerId}
+          defaultReceiptId={modal.receiptId}
           defaultStatementId={modal.statementId}
           receipts={store.customerReceipts}
           receiptAllocations={store.receiptAllocations}
           statements={store.monthlyStatements}
           store={store}
-          onClose={() => setModal(null)}
+          onClose={() => setModal(modal.returnToPool ? { type: "receiptPool", customerId: modal.customerId } : null)}
           onSubmit={(allocation) => {
             createAllocation(allocation);
-            setModal(null);
+            setModal(modal.returnToPool ? { type: "receiptPool", customerId: modal.customerId } : null);
+          }}
+        />
+      )}
+      {modal?.type === "invoiceAllocation" && (
+        <InvoiceAllocationModal
+          customerId={modal.customerId}
+          defaultInvoiceId={modal.invoiceId}
+          defaultStatementId={modal.statementId}
+          invoiceAllocations={store.invoiceAllocations ?? []}
+          invoices={store.customerInvoices ?? []}
+          statements={store.monthlyStatements}
+          store={store}
+          onClose={() => setModal(modal.returnToPool ? { type: "invoicePool", customerId: modal.customerId } : null)}
+          onSubmit={(allocation) => {
+            createInvoiceAllocation(allocation);
+            setModal(modal.returnToPool ? { type: "invoicePool", customerId: modal.customerId } : null);
           }}
         />
       )}
@@ -1421,6 +1473,16 @@ export function ReconciliationApp() {
           tone="danger"
         />
       )}
+      {pendingInvoiceAllocationDeleteId && (
+        <ConfirmationDialog
+          confirmLabel="确认删除"
+          description="删除后，这张发票会回到开票池的未分配状态，可以重新分配到正确的月份或款号。开票池中的原始发票不会被删除。"
+          onCancel={() => setPendingInvoiceAllocationDeleteId(undefined)}
+          onConfirm={confirmDeleteInvoiceAllocation}
+          title="确认删除这条开票分配？"
+          tone="danger"
+        />
+      )}
       </div>
     </ClickSpark>
   );
@@ -1431,17 +1493,15 @@ function CustomerStatementPanel(props: {
   detailTab: DetailTab;
   draftFilters: Filters;
   filteredItems: NonNullable<ReturnType<typeof summarizeStatement>["items"]>;
-  onAddAllocation(): void;
-  onAddInvoice(accountId: string): void;
   onAddItem(): void;
   onAddStatement(): void;
+  onOpenInvoicePool(): void;
   onOpenReceiptPool(): void;
   onApplyFilters(): void;
   onDeleteAllocation(allocationId: string): void;
   onDeleteAdjustment(adjustmentId: string): void;
-  onDeleteInvoice(accountId: string, invoiceId: string): void;
+  onDeleteInvoiceAllocation(allocationId: string): void;
   onDeleteItem(itemId: string): void;
-  onEditInvoice(accountId: string, record: InvoiceRecord): void;
   onEditItem(item: StatementItem): void;
   onExport(): void;
   onPreview(): void;
@@ -1456,6 +1516,8 @@ function CustomerStatementPanel(props: {
   periods: string[];
   receiptAllocations: ReceiptAllocation[];
   receipts: CustomerReceipt[];
+  customerInvoices: CustomerInvoice[];
+  invoiceAllocations: InvoiceAllocation[];
   selectedAccount?: StyleAccount;
   selectedCustomer?: Customer;
   selectedCustomerName: string;
@@ -1467,6 +1529,8 @@ function CustomerStatementPanel(props: {
   summary: ReturnType<typeof summarizeAll>;
 }) {
   const [customerSearchText, setCustomerSearchText] = useState("");
+  const styleTableRef = useRef<HTMLTableElement | null>(null);
+  const [styleColumnWidths, setStyleColumnWidths] = useState<number[] | null>(null);
   const customerButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const matchedCustomerId = useMemo(() => {
     const keyword = customerSearchText.trim().toLowerCase();
@@ -1480,6 +1544,38 @@ function CustomerStatementPanel(props: {
     if (!matchedCustomerId) return;
     customerButtonRefs.current[matchedCustomerId]?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [matchedCustomerId]);
+
+  function beginStyleColumnResize(columnIndex: number, event: ReactPointerEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    const table = styleTableRef.current;
+    if (!table || columnIndex >= 7) return;
+
+    const headers = Array.from(table.querySelectorAll<HTMLTableCellElement>("thead th"));
+    const initialWidths = styleColumnWidths ?? headers.map((header) => header.getBoundingClientRect().width);
+    const startX = event.clientX;
+    const minimumWidths = [126, 108, 116, 116, 88, 116, 160, 118];
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      const delta = moveEvent.clientX - startX;
+      const maxNegativeDelta = initialWidths[columnIndex] - minimumWidths[columnIndex];
+      const maxPositiveDelta = initialWidths[columnIndex + 1] - minimumWidths[columnIndex + 1];
+      const adjustedDelta = Math.max(-maxNegativeDelta, Math.min(maxPositiveDelta, delta));
+      const nextWidths = [...initialWidths];
+      nextWidths[columnIndex] = initialWidths[columnIndex] + adjustedDelta;
+      nextWidths[columnIndex + 1] = initialWidths[columnIndex + 1] - adjustedDelta;
+      setStyleColumnWidths(nextWidths);
+    };
+    const stopResize = () => {
+      document.removeEventListener("pointermove", handlePointerMove);
+      document.removeEventListener("pointerup", stopResize);
+      document.body.classList.remove("is-column-resizing");
+    };
+
+    document.body.classList.add("is-column-resizing");
+    document.addEventListener("pointermove", handlePointerMove);
+    document.addEventListener("pointerup", stopResize, { once: true });
+  }
 
   return (
     <div className="recon-workspace">
@@ -1591,9 +1687,9 @@ function CustomerStatementPanel(props: {
                   <CreditCard size={16} />
                   收款池
                 </button>
-                <button className="recon-button recon-button-light" disabled={!props.statement} onClick={props.onAddAllocation} type="button">
+                <button className="recon-button recon-button-light" onClick={props.onOpenInvoicePool} type="button">
                   <ReceiptText size={16} />
-                  收款分配
+                  开票池
                 </button>
                 <button className="recon-button recon-button-primary recon-statement-add-item" disabled={!props.statement} onClick={props.onAddItem} type="button">
                   <Plus size={16} />
@@ -1608,17 +1704,30 @@ function CustomerStatementPanel(props: {
           ) : (
             <>
               <div className="recon-table-wrap recon-style-table-wrap">
-                <table className="recon-table recon-style-table">
+                <table className="recon-table recon-style-table" ref={styleTableRef}>
+                  {styleColumnWidths && (
+                    <colgroup>
+                      {styleColumnWidths.map((width, index) => (
+                        <col key={index} style={{ width: `${width}px` }} />
+                      ))}
+                    </colgroup>
+                  )}
                   <thead>
                     <tr>
-                      <th>款号</th>
-                      <th>应收金额</th>
-                      <th>已开票金额</th>
-                      <th>已收款金额</th>
-                      <th>调整</th>
-                      <th>未收金额</th>
-                      <th>对账状态</th>
-                      <th>操作</th>
+                      {["款号", "应收金额", "已开票金额", "已收款金额", "调整", "未收金额", "对账状态", "操作"].map((label, index) => (
+                        <th key={label}>
+                          <span>{label}</span>
+                          {index < 7 && (
+                            <button
+                              aria-label={`调整${label}列宽`}
+                              className="recon-column-resizer"
+                              onPointerDown={(event) => beginStyleColumnResize(index, event)}
+                              title="拖动调整列宽"
+                              type="button"
+                            />
+                          )}
+                        </th>
+                      ))}
                     </tr>
                   </thead>
                   <tbody>
@@ -1679,13 +1788,13 @@ function CustomerStatementPanel(props: {
               account={props.selectedAccount}
               adjustments={props.selectedStatementSummary!.adjustments}
               allocations={props.receiptAllocations}
+              customerInvoices={props.customerInvoices}
               detailTab={props.detailTab}
+              invoiceAllocations={props.invoiceAllocations}
               itemSummary={props.selectedItemSummary}
-              onAddInvoice={props.onAddInvoice}
               onDeleteAdjustment={props.onDeleteAdjustment}
               onDeleteAllocation={props.onDeleteAllocation}
-              onDeleteInvoice={props.onDeleteInvoice}
-              onEditInvoice={props.onEditInvoice}
+              onDeleteInvoiceAllocation={props.onDeleteInvoiceAllocation}
               onSaveAdjustment={props.onSaveAdjustment}
               onSetDetailTab={props.onSetDetailTab}
               receipts={props.receipts}
@@ -1706,13 +1815,13 @@ function StatementDetail(props: {
   account?: StyleAccount;
   adjustments: StatementAdjustment[];
   allocations: ReceiptAllocation[];
+  customerInvoices: CustomerInvoice[];
   detailTab: DetailTab;
+  invoiceAllocations: InvoiceAllocation[];
   itemSummary?: ReturnType<typeof summarizeStatement>["items"][number];
-  onAddInvoice(accountId: string): void;
   onDeleteAdjustment(adjustmentId: string): void;
   onDeleteAllocation(allocationId: string): void;
-  onDeleteInvoice(accountId: string, invoiceId: string): void;
-  onEditInvoice(accountId: string, record: InvoiceRecord): void;
+  onDeleteInvoiceAllocation(allocationId: string): void;
   onSaveAdjustment(adjustment: StatementAdjustment): void;
   onSetDetailTab(tab: DetailTab): void;
   receipts: CustomerReceipt[];
@@ -1723,6 +1832,9 @@ function StatementDetail(props: {
   const statementAllocations = props.allocations.filter((allocation) => allocation.statementId === props.statementId);
   const styleAllocations = statementAllocations.filter((allocation) => allocation.styleAccountId === props.account?.id);
   const statementOnlyAllocations = statementAllocations.filter((allocation) => !allocation.styleAccountId);
+  const styleInvoiceAllocations = props.invoiceAllocations.filter(
+    (allocation) => allocation.statementId === props.statementId && allocation.styleAccountId === props.account?.id,
+  );
   const visibleAdjustments = props.adjustments;
   const [isAdjustmentModalOpen, setIsAdjustmentModalOpen] = useState(false);
   const [viewingAdjustment, setViewingAdjustment] = useState<StatementAdjustment | null>(null);
@@ -1754,17 +1866,6 @@ function StatementDetail(props: {
             <button className="recon-button recon-button-warning" onClick={() => setIsAdjustmentModalOpen(true)} type="button">
               <Plus size={16} />
               新增扣款
-            </button>
-          )}
-          {props.detailTab === "invoice" && (
-            <button
-              className="recon-button recon-button-accent"
-              disabled={!props.account}
-              onClick={() => props.account && props.onAddInvoice(props.account.id)}
-              type="button"
-            >
-              <Plus size={16} />
-              新增开票
             </button>
           )}
         </div>
@@ -1806,12 +1907,12 @@ function StatementDetail(props: {
       )}
       {props.detailTab === "invoice" && props.account && (
         <InvoiceRecordCards
-          onDelete={(recordId) => props.onDeleteInvoice(props.account!.id, recordId)}
-          onEdit={(record) => props.onEditInvoice(props.account!.id, record)}
-          records={props.account.invoiceRecords}
+          allocations={styleInvoiceAllocations}
+          invoices={props.customerInvoices}
+          onDelete={props.onDeleteInvoiceAllocation}
         />
       )}
-      {props.detailTab === "invoice" && !props.account && <EmptyPanel text="请选择一个款号录入开票记录。" />}
+      {props.detailTab === "invoice" && !props.account && <EmptyPanel text="请选择一个款号查看已分配开票记录。" />}
       {props.detailTab === "payment" && (
         <PaymentAllocationCards
           allocations={[...styleAllocations, ...statementOnlyAllocations]}
@@ -1954,46 +2055,40 @@ function PaymentAllocationCards(props: {
   );
 }
 
-function InvoiceRecordCards(props: {
-  onDelete(recordId: string): void;
-  onEdit(record: InvoiceRecord): void;
-  records: InvoiceRecord[];
-}) {
+function InvoiceRecordCards(props: { allocations: InvoiceAllocation[]; invoices: CustomerInvoice[]; onDelete(allocationId: string): void }) {
   return (
     <div className="recon-mini-card-list">
-      {props.records.map((record) => (
-        <article className="recon-mini-card" key={record.id}>
+      {props.allocations.map((allocation) => {
+        const invoice = props.invoices.find((item) => item.id === allocation.invoiceId);
+        return (
+        <article className="recon-mini-card" key={allocation.id}>
           <div className="recon-mini-card-head">
             <div>
               <span>开票日期</span>
-              <strong>{record.date}</strong>
+              <strong>{invoice?.invoiceDate ?? "-"}</strong>
             </div>
-            <div className="recon-row-actions">
-              <button onClick={() => props.onEdit(record)} title="编辑" type="button">
-                <Pencil size={15} />
-              </button>
-              <button onClick={() => props.onDelete(record.id)} title="删除" type="button">
-                <Trash2 size={15} />
-              </button>
-            </div>
+            <button className="recon-icon-button" onClick={() => props.onDelete(allocation.id)} title="删除开票分配" type="button">
+              <Trash2 size={15} />
+            </button>
           </div>
           <dl>
             <div>
               <dt>发票号码</dt>
-              <dd>{record.invoiceNo}</dd>
+              <dd>{invoice?.invoiceNo || "-"}</dd>
             </div>
             <div>
-              <dt>开票金额</dt>
-              <dd>¥ {formatMoney(record.amount)}</dd>
+              <dt>分配金额</dt>
+              <dd>¥ {formatMoney(allocation.allocatedAmount)}</dd>
             </div>
             <div>
               <dt>备注</dt>
-              <dd>{record.remark || "-"}</dd>
+              <dd>{allocation.note || invoice?.note || "-"}</dd>
             </div>
           </dl>
         </article>
-      ))}
-      {props.records.length === 0 && <EmptyPanel text="暂无记录。" />}
+        );
+      })}
+      {props.allocations.length === 0 && <EmptyPanel text="暂无已分配开票记录。" />}
     </div>
   );
 }
@@ -3085,29 +3180,35 @@ function SettingsModule() {
   );
 }
 
-function InvoiceRecordsModule(props: { customers: Customer[]; onImport(rows: InvoiceImportRow[], warnings: string[]): void; styleAccounts: StyleAccount[] }) {
+function InvoiceRecordsModule(props: {
+  customers: Customer[];
+  invoices: CustomerInvoice[];
+  invoiceAllocations: InvoiceAllocation[];
+  onImport(rows: InvoiceImportRow[], warnings: string[]): void;
+  styleAccounts: StyleAccount[];
+}) {
   const [customerId, setCustomerId] = useState("");
   const [periodMonth, setPeriodMonth] = useState("");
   const [styleKeyword, setStyleKeyword] = useState("");
   const [invoiceKeyword, setInvoiceKeyword] = useState("");
-  const rows = props.styleAccounts.flatMap((account) =>
-    account.invoiceRecords.map((record) => ({
-      account,
-      customer: props.customers.find((customer) => customer.id === account.customerId),
-      record,
-    })),
-  );
-  const periodOptions = Array.from(new Set(rows.map((row) => row.record.date.slice(0, 7)))).sort().reverse();
-  const filteredRows = rows.filter(({ account, record }) => {
-    const matchesCustomer = !customerId || account.customerId === customerId;
-    const matchesPeriod = !periodMonth || record.date.slice(0, 7) === periodMonth;
-    const matchesStyle = !styleKeyword.trim() || account.styleNo.toLowerCase().includes(styleKeyword.trim().toLowerCase());
+  const rows = props.invoices.map((invoice) => {
+    const allocations = props.invoiceAllocations.filter((allocation) => allocation.invoiceId === invoice.id);
+    const styleNos = allocations
+      .map((allocation) => props.styleAccounts.find((account) => account.id === allocation.styleAccountId)?.styleNo)
+      .filter((styleNo): styleNo is string => Boolean(styleNo));
+    return { customer: props.customers.find((customer) => customer.id === invoice.customerId), invoice, styleNos };
+  });
+  const periodOptions = Array.from(new Set(rows.map((row) => row.invoice.invoiceDate.slice(0, 7)))).sort().reverse();
+  const filteredRows = rows.filter(({ invoice, styleNos }) => {
+    const matchesCustomer = !customerId || invoice.customerId === customerId;
+    const matchesPeriod = !periodMonth || invoice.invoiceDate.slice(0, 7) === periodMonth;
+    const matchesStyle = !styleKeyword.trim() || styleNos.join(" ").toLowerCase().includes(styleKeyword.trim().toLowerCase());
     const matchesInvoice =
       !invoiceKeyword.trim() ||
-      `${record.invoiceNo} ${record.remark ?? ""}`.toLowerCase().includes(invoiceKeyword.trim().toLowerCase());
+      `${invoice.invoiceNo} ${invoice.note ?? ""}`.toLowerCase().includes(invoiceKeyword.trim().toLowerCase());
     return matchesCustomer && matchesPeriod && matchesStyle && matchesInvoice;
   });
-  const totalAmount = filteredRows.reduce((sum, row) => sum + row.record.amount, 0);
+  const totalAmount = filteredRows.reduce((sum, row) => sum + row.invoice.amount, 0);
   const invoiceHeaderTitle = customerId ? props.customers.find((customer) => customer.id === customerId)?.name ?? "当前客户" : "全部客户";
 
   async function importInvoiceFile(event: ChangeEvent<HTMLInputElement>) {
@@ -3187,14 +3288,14 @@ function InvoiceRecordsModule(props: { customers: Customer[]; onImport(rows: Inv
           </tr>
         </thead>
         <tbody>
-          {filteredRows.map(({ account, customer, record }) => (
-            <tr key={record.id}>
+          {filteredRows.map(({ customer, invoice, styleNos }) => (
+            <tr key={invoice.id}>
               <td>{customer?.name ?? "-"}</td>
-              <td>{account.styleNo}</td>
-              <td>{record.date}</td>
-              <td>{record.invoiceNo}</td>
-              <td>¥ {formatMoney(record.amount)}</td>
-              <td>{record.remark || "-"}</td>
+              <td>{styleNos.length > 0 ? styleNos.join("、") : "未分配"}</td>
+              <td>{invoice.invoiceDate}</td>
+              <td>{invoice.invoiceNo || "-"}</td>
+              <td>¥ {formatMoney(invoice.amount)}</td>
+              <td>{invoice.note || "-"}</td>
             </tr>
           ))}
         </tbody>
@@ -3462,8 +3563,11 @@ function ReceiptPoolModal(props: {
   allocations: ReceiptAllocation[];
   customer?: Customer;
   onClose(): void;
+  onSubmitAllocation(allocation: ReceiptAllocation | ReceiptAllocation[]): void;
   onSave(receipts: CustomerReceipt[], deletedReceiptIds: string[]): void;
   receipts: CustomerReceipt[];
+  statements: MonthlyStatement[];
+  store: Parameters<typeof summarizeStatement>[1];
 }) {
   const [rows, setRows] = useState<ReceiptPoolRow[]>(() =>
     props.receipts.map((receipt) => ({
@@ -3485,6 +3589,7 @@ function ReceiptPoolModal(props: {
     rowId: string;
     type: "delete" | "unlock";
   }>();
+  const [allocationReceiptId, setAllocationReceiptId] = useState<string>();
   const pageCount = Math.max(1, Math.ceil(rows.length / RECEIPT_POOL_PAGE_SIZE));
   const visibleRows = useMemo(
     () => rows.slice((currentPage - 1) * RECEIPT_POOL_PAGE_SIZE, currentPage * RECEIPT_POOL_PAGE_SIZE),
@@ -3668,6 +3773,16 @@ function ReceiptPoolModal(props: {
                     <td>
                       <div className="receipt-pool-actions">
                         <button
+                          aria-label="分配收款"
+                          className="receipt-pool-icon-action is-allocate"
+                          disabled={row.isLocked || row.isNew || amount <= allocatedAmount}
+                          onClick={() => setAllocationReceiptId(row.id)}
+                          title={row.isNew ? "请先保存收款后再分配" : row.isLocked ? "该收款已锁定" : "收款分配"}
+                          type="button"
+                        >
+                          <Network size={16} />
+                        </button>
+                        <button
                           aria-label="删除收款"
                           className="receipt-pool-icon-action is-delete"
                           disabled={row.isLocked}
@@ -3739,6 +3854,21 @@ function ReceiptPoolModal(props: {
         </div>
       </div>
       </Modal>
+      {allocationReceiptId && props.customer && (
+        <AllocationModal
+          customerId={props.customer.id}
+          defaultReceiptId={allocationReceiptId}
+          receipts={props.receipts}
+          receiptAllocations={props.allocations}
+          statements={props.statements}
+          store={props.store}
+          onClose={() => setAllocationReceiptId(undefined)}
+          onSubmit={(allocation) => {
+            props.onSubmitAllocation(allocation);
+            setAllocationReceiptId(undefined);
+          }}
+        />
+      )}
       {pendingConfirmation && (
         <ConfirmationDialog
           confirmLabel={pendingConfirmation.type === "delete" ? "确认删除" : "确认解锁"}
@@ -3759,8 +3889,325 @@ function ReceiptPoolModal(props: {
   );
 }
 
+type InvoicePoolRow = {
+  id: string;
+  invoiceDate: string;
+  invoiceNo: string;
+  amount: string;
+  isLocked: boolean;
+  note: string;
+  createdAt?: string;
+  isNew?: boolean;
+};
+
+function InvoicePoolModal(props: {
+  allocations: InvoiceAllocation[];
+  customer?: Customer;
+  invoices: CustomerInvoice[];
+  onClose(): void;
+  onSubmitAllocation(allocation: InvoiceAllocation | InvoiceAllocation[]): void;
+  onSave(invoices: CustomerInvoice[], deletedInvoiceIds: string[]): void;
+  statements: MonthlyStatement[];
+  store: Parameters<typeof summarizeStatement>[1];
+}) {
+  const [rows, setRows] = useState<InvoicePoolRow[]>(() =>
+    props.invoices.map((invoice) => ({
+      id: invoice.id,
+      invoiceDate: invoice.invoiceDate,
+      invoiceNo: invoice.invoiceNo,
+      amount: invoice.amount.toFixed(2),
+      isLocked: invoice.isLocked === true,
+      note: invoice.note ?? "",
+      createdAt: invoice.createdAt,
+    })),
+  );
+  const [deletedInvoiceIds, setDeletedInvoiceIds] = useState<string[]>([]);
+  const [error, setError] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
+  const [pendingConfirmation, setPendingConfirmation] = useState<{ allocatedAmount?: number; rowId: string; type: "delete" | "unlock" }>();
+  const [allocationInvoiceId, setAllocationInvoiceId] = useState<string>();
+  const pageCount = Math.max(1, Math.ceil(rows.length / RECEIPT_POOL_PAGE_SIZE));
+  const visibleRows = useMemo(
+    () => rows.slice((currentPage - 1) * RECEIPT_POOL_PAGE_SIZE, currentPage * RECEIPT_POOL_PAGE_SIZE),
+    [currentPage, rows],
+  );
+
+  useEffect(() => {
+    setCurrentPage((page) => Math.min(page, pageCount));
+  }, [pageCount]);
+
+  function updateRow(rowId: string, patch: Partial<InvoicePoolRow>) {
+    setRows((currentRows) => currentRows.map((row) => (row.id === rowId ? { ...row, ...patch } : row)));
+  }
+
+  function addRow() {
+    setRows((currentRows) => {
+      const nextRows = [
+        ...currentRows,
+        {
+          id: createId("invoice"),
+          invoiceDate: getTodayString(),
+          invoiceNo: "",
+          amount: "",
+          isLocked: false,
+          note: "",
+          isNew: true,
+        },
+      ];
+      setCurrentPage(Math.ceil(nextRows.length / RECEIPT_POOL_PAGE_SIZE));
+      return nextRows;
+    });
+  }
+
+  function deleteRow(row: InvoicePoolRow) {
+    if (row.isLocked) return;
+    setPendingConfirmation({ allocatedAmount: getInvoiceAllocatedAmount(row.id, props.allocations), rowId: row.id, type: "delete" });
+  }
+
+  function toggleRowLock(row: InvoicePoolRow) {
+    if (row.isLocked) {
+      setPendingConfirmation({ rowId: row.id, type: "unlock" });
+      return;
+    }
+    updateRow(row.id, { isLocked: true });
+  }
+
+  function confirmPendingAction() {
+    if (!pendingConfirmation) return;
+    const row = rows.find((item) => item.id === pendingConfirmation.rowId);
+    if (!row) {
+      setPendingConfirmation(undefined);
+      return;
+    }
+    if (pendingConfirmation.type === "unlock") {
+      updateRow(row.id, { isLocked: false });
+    } else if (!row.isLocked) {
+      setRows((currentRows) => currentRows.filter((item) => item.id !== row.id));
+      if (!row.isNew) setDeletedInvoiceIds((currentIds) => [...currentIds, row.id]);
+    }
+    setPendingConfirmation(undefined);
+  }
+
+  function saveRows() {
+    if (!props.customer) return;
+    const today = getTodayString();
+    const nextInvoices: CustomerInvoice[] = [];
+    for (const [rowIndex, row] of rows.entries()) {
+      const amount = parseMoney(row.amount);
+      const allocatedAmount = getInvoiceAllocatedAmount(row.id, props.allocations);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(row.invoiceDate)) {
+        setCurrentPage(Math.floor(rowIndex / RECEIPT_POOL_PAGE_SIZE) + 1);
+        setError("开票日期必须使用 YYYY-MM-DD 格式。");
+        return;
+      }
+      if (!row.amount.trim() || amount <= 0) {
+        setCurrentPage(Math.floor(rowIndex / RECEIPT_POOL_PAGE_SIZE) + 1);
+        setError("开票金额不能为空，且必须大于 0。");
+        return;
+      }
+      if (amount < allocatedAmount) {
+        setCurrentPage(Math.floor(rowIndex / RECEIPT_POOL_PAGE_SIZE) + 1);
+        setError("已有分配记录的开票，修改后的开票金额不能小于已分配金额。");
+        return;
+      }
+      nextInvoices.push({
+        id: row.id,
+        customerId: props.customer.id,
+        invoiceDate: row.invoiceDate,
+        invoiceNo: row.invoiceNo.trim(),
+        amount,
+        isLocked: row.isLocked,
+        note: row.note.trim(),
+        createdAt: row.createdAt ?? today,
+        updatedAt: today,
+      });
+    }
+    setError("");
+    props.onSave(nextInvoices, deletedInvoiceIds);
+  }
+
+  return (
+    <>
+      <Modal onClose={props.onClose} size="receiptPool" title="开票池">
+        <div className="receipt-pool invoice-pool">
+          <div className="receipt-pool__customer">
+            客户：<strong>{props.customer?.name ?? "未选择客户"}</strong>
+          </div>
+          <div className="receipt-pool__table-wrap">
+            <table className="receipt-pool-table invoice-pool-table">
+              <thead>
+                <tr>
+                  <th>开票日期</th>
+                  <th>发票号码</th>
+                  <th>开票金额</th>
+                  <th>已分配金额</th>
+                  <th>未分配金额</th>
+                  <th>备注</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visibleRows.map((row) => {
+                  const allocatedAmount = getInvoiceAllocatedAmount(row.id, props.allocations);
+                  const amount = parseMoney(row.amount);
+                  return (
+                    <tr className={row.isLocked ? "is-locked" : undefined} key={row.id}>
+                      <td><input disabled={row.isLocked} onChange={(event) => updateRow(row.id, { invoiceDate: event.target.value })} type="date" value={row.invoiceDate} /></td>
+                      <td><input disabled={row.isLocked} onChange={(event) => updateRow(row.id, { invoiceNo: event.target.value })} placeholder="发票号码" value={row.invoiceNo} /></td>
+                      <td><input disabled={row.isLocked} min="0" onChange={(event) => updateRow(row.id, { amount: event.target.value })} step="0.01" type="number" value={row.amount} /></td>
+                      <td>¥ {formatMoney(allocatedAmount)}</td>
+                      <td className={amount - allocatedAmount > 0 ? "is-danger" : "is-ok"}>¥ {formatMoney(amount - allocatedAmount)}</td>
+                      <td><input disabled={row.isLocked} onChange={(event) => updateRow(row.id, { note: event.target.value })} value={row.note} /></td>
+                      <td>
+                        <div className="receipt-pool-actions">
+                          <button aria-label="分配开票" className="receipt-pool-icon-action is-allocate" disabled={row.isLocked || row.isNew || amount <= allocatedAmount} onClick={() => setAllocationInvoiceId(row.id)} title={row.isNew ? "请先保存开票后再分配" : row.isLocked ? "该开票已锁定" : "开票分配"} type="button"><Network size={16} /></button>
+                          <button aria-label="删除开票" className="receipt-pool-icon-action is-delete" disabled={row.isLocked} onClick={() => deleteRow(row)} title={row.isLocked ? "该开票已锁定" : "删除开票"} type="button"><Trash2 size={16} /></button>
+                          <button aria-label={row.isLocked ? "解锁开票" : "锁定开票"} aria-pressed={row.isLocked} className={`receipt-pool-icon-action ${row.isLocked ? "is-lock-closed" : "is-lock-open"}`} onClick={() => toggleRowLock(row)} title={row.isLocked ? "解锁开票" : "锁定开票"} type="button">{row.isLocked ? <Lock size={16} /> : <LockOpen size={16} />}</button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+            {rows.length === 0 && <EmptyPanel text="当前客户暂无开票记录，可点击新增一行录入。" />}
+          </div>
+          <div className="receipt-pool__below">
+            <div className="receipt-pool__below-actions">
+              <button className="recon-button recon-button-light" onClick={addRow} type="button"><Plus size={16} />新增一行</button>
+              <span className="receipt-pool__count">共 {rows.length} 笔开票</span>
+            </div>
+            {error && <span className="receipt-pool__error">{error}</span>}
+            <div className="receipt-pool__pagination" aria-label="开票池分页">
+              <button aria-label="上一页" disabled={currentPage <= 1} onClick={() => setCurrentPage((page) => Math.max(1, page - 1))} type="button"><ChevronLeft size={17} /></button>
+              <span>第 {currentPage} / {pageCount} 页</span>
+              <button aria-label="下一页" disabled={currentPage >= pageCount} onClick={() => setCurrentPage((page) => Math.min(pageCount, page + 1))} type="button"><ChevronRight size={17} /></button>
+            </div>
+          </div>
+          <div className="receipt-pool__footer">
+            <button className="recon-button recon-button-light" onClick={props.onClose} type="button">取消</button>
+            <button className="recon-button recon-button-primary" onClick={saveRows} type="button">保存</button>
+          </div>
+        </div>
+      </Modal>
+      {allocationInvoiceId && props.customer && (
+        <InvoiceAllocationModal
+          customerId={props.customer.id}
+          defaultInvoiceId={allocationInvoiceId}
+          invoiceAllocations={props.allocations}
+          invoices={props.invoices}
+          statements={props.statements}
+          store={props.store}
+          onClose={() => setAllocationInvoiceId(undefined)}
+          onSubmit={(allocation) => {
+            props.onSubmitAllocation(allocation);
+            setAllocationInvoiceId(undefined);
+          }}
+        />
+      )}
+      {pendingConfirmation && (
+        <ConfirmationDialog
+          confirmLabel={pendingConfirmation.type === "delete" ? "确认删除" : "确认解锁"}
+          description={pendingConfirmation.type === "delete" ? pendingConfirmation.allocatedAmount && pendingConfirmation.allocatedAmount > 0 ? "该开票已有分配记录，删除后会影响对账单和款号的开票结果。此操作将在保存开票池后生效。" : "删除后将无法在开票池中找到这笔开票。此操作将在保存开票池后生效。" : "解锁后，这笔开票可以继续修改或删除。"}
+          onCancel={() => setPendingConfirmation(undefined)}
+          onConfirm={confirmPendingAction}
+          title={pendingConfirmation.type === "delete" ? "确认删除这笔开票？" : "确认解锁这笔开票？"}
+          tone={pendingConfirmation.type === "delete" ? "danger" : "primary"}
+        />
+      )}
+    </>
+  );
+}
+
+function InvoiceAllocationModal(props: {
+  customerId: string;
+  defaultInvoiceId?: string;
+  defaultStatementId?: string;
+  invoiceAllocations: InvoiceAllocation[];
+  invoices: CustomerInvoice[];
+  statements: MonthlyStatement[];
+  store: Parameters<typeof summarizeStatement>[1];
+  onClose(): void;
+  onSubmit(allocation: InvoiceAllocation | InvoiceAllocation[]): void;
+}) {
+  const customerInvoices = props.invoices.filter((invoice) => invoice.customerId === props.customerId);
+  const customerStatements = props.statements.filter((statement) => statement.customerId === props.customerId);
+  const [invoiceId, setInvoiceId] = useState(props.defaultInvoiceId ?? customerInvoices[0]?.id ?? "");
+  const [statementId, setStatementId] = useState(props.defaultStatementId ?? customerStatements[0]?.id ?? "");
+  const statementSummary = customerStatements.find((statement) => statement.id === statementId)
+    ? summarizeStatement(customerStatements.find((statement) => statement.id === statementId)!, props.store)
+    : null;
+  const [styleAccountId, setStyleAccountId] = useState("");
+  const selectedInvoice = customerInvoices.find((invoice) => invoice.id === invoiceId);
+  const remainingAmount = selectedInvoice ? roundMoney(selectedInvoice.amount - getInvoiceAllocatedAmount(selectedInvoice.id, props.invoiceAllocations)) : 0;
+  const selectedItemSummary = statementSummary?.items.find((item) => item.item.styleAccountId === styleAccountId);
+  const statementUninvoicedTotal = sumMoney((statementSummary?.items ?? []).map((item) => Math.max(item.receivableAmount - item.invoicedAmount, 0)));
+  const maxAssignableAmount = styleAccountId
+    ? roundMoney(Math.min(remainingAmount, Math.max((selectedItemSummary?.receivableAmount ?? 0) - (selectedItemSummary?.invoicedAmount ?? 0), 0)))
+    : roundMoney(Math.min(remainingAmount, statementUninvoicedTotal));
+  const [amount, setAmount] = useState("");
+  const [note, setNote] = useState("");
+
+  function buildAllocations() {
+    if (!invoiceId || !statementId) return [];
+    let pendingAmount = roundMoney(Math.min(parseMoney(amount), remainingAmount));
+    if (pendingAmount <= 0) return [];
+    if (styleAccountId) {
+      const available = Math.max((selectedItemSummary?.receivableAmount ?? 0) - (selectedItemSummary?.invoicedAmount ?? 0), 0);
+      const allocatedAmount = roundMoney(Math.min(pendingAmount, available));
+      return allocatedAmount > 0 ? [{ id: createId("invoice-alloc"), invoiceId, customerId: props.customerId, statementId, styleAccountId, allocatedAmount, note: note.trim() }] : [];
+    }
+    const allocations: InvoiceAllocation[] = [];
+    for (const item of statementSummary?.items ?? []) {
+      if (pendingAmount <= 0) break;
+      const available = roundMoney(Math.max(item.receivableAmount - item.invoicedAmount, 0));
+      if (available <= 0) continue;
+      const allocatedAmount = roundMoney(Math.min(pendingAmount, available));
+      allocations.push({ id: createId("invoice-alloc"), invoiceId, customerId: props.customerId, statementId, styleAccountId: item.item.styleAccountId, allocatedAmount, note: note.trim() || "自动分配到整张月度对账单" });
+      pendingAmount = roundMoney(pendingAmount - allocatedAmount);
+    }
+    return allocations;
+  }
+
+  return (
+    <Modal onClose={props.onClose} title="开票分配">
+      <form className="recon-form" onSubmit={(event) => {
+        event.preventDefault();
+        const allocations = buildAllocations();
+        if (allocations.length === 0) {
+          window.alert("没有可分配金额，请检查开票未分配金额或款号未开票金额。");
+          return;
+        }
+        props.onSubmit(allocations);
+      }}>
+        <Field label="客户开票" required>
+          <AnimatedSelect ariaLabel="客户开票" onChange={setInvoiceId} options={customerInvoices.map((invoice) => {
+            const allocated = getInvoiceAllocatedAmount(invoice.id, props.invoiceAllocations);
+            return { label: `${invoice.invoiceDate} / ${invoice.invoiceNo || "无发票号"} / ¥ ${formatMoney(invoice.amount)} / 未分配 ¥ ${formatMoney(invoice.amount - allocated)}`, value: invoice.id };
+          })} value={invoiceId} />
+        </Field>
+        <Field label="分配到月度对账单" required>
+          <AnimatedSelect ariaLabel="分配到月度对账单" onChange={(value) => { setStatementId(value); setStyleAccountId(""); }} options={customerStatements.map((statement) => ({ label: `${statement.periodMonth} / ${statement.status}`, value: statement.id }))} value={statementId} />
+        </Field>
+        <Field label="分配方式">
+          <AnimatedSelect ariaLabel="分配方式" onChange={setStyleAccountId} options={[{ label: "自动分配到整张月度对账单", value: "" }, ...(statementSummary?.items.map((item) => ({ label: `${item.styleAccount?.styleNo ?? "-"} / 未开票 ¥ ${formatMoney(Math.max(item.receivableAmount - item.invoicedAmount, 0))}`, value: item.item.styleAccountId })) ?? [])]} value={styleAccountId} />
+        </Field>
+        <Field label="分配金额">
+          <>
+            <div className="allocation-amount-row"><input min="0" onChange={(event) => setAmount(event.target.value)} placeholder={`最多可分配 ¥ ${formatMoney(maxAssignableAmount)}`} step="0.01" type="number" value={amount} /><button className="recon-button recon-button-light" onClick={() => setAmount(maxAssignableAmount.toFixed(2))} type="button">一键最大</button></div>
+            <small>开票未分配 ¥ {formatMoney(remainingAmount)} / 本月款号未开票 ¥ {formatMoney(statementUninvoicedTotal)}</small>
+          </>
+        </Field>
+        <Field label="备注"><textarea onChange={(event) => setNote(event.target.value)} value={note} /></Field>
+        <ModalActions onClose={props.onClose} submitLabel="保存分配" />
+      </form>
+    </Modal>
+  );
+}
+
 function AllocationModal(props: {
   customerId: string;
+  defaultReceiptId?: string;
   defaultStatementId?: string;
   onClose(): void;
   onSubmit(allocation: ReceiptAllocation | ReceiptAllocation[]): void;
@@ -3771,7 +4218,7 @@ function AllocationModal(props: {
 }) {
   const customerReceipts = props.receipts.filter((receipt) => receipt.customerId === props.customerId);
   const customerStatements = props.statements.filter((statement) => statement.customerId === props.customerId);
-  const [receiptId, setReceiptId] = useState(customerReceipts[0]?.id ?? "");
+  const [receiptId, setReceiptId] = useState(props.defaultReceiptId ?? customerReceipts[0]?.id ?? "");
   const [statementId, setStatementId] = useState(props.defaultStatementId ?? customerStatements[0]?.id ?? "");
   const statementSummary = customerStatements.find((statement) => statement.id === statementId)
     ? summarizeStatement(customerStatements.find((statement) => statement.id === statementId)!, props.store)

@@ -99,7 +99,11 @@ export function summarizeStatement(statement: MonthlyStatement, store: Reconcili
       .filter((allocation) => allocation.statementId === statement.id)
       .map((allocation) => allocation.allocatedAmount),
   );
-  const currentInvoiced = sumMoney(items.map((item) => item.invoicedAmount));
+  const currentInvoiced = sumMoney(
+    (store.invoiceAllocations ?? [])
+      .filter((allocation) => allocation.statementId === statement.id)
+      .map((allocation) => allocation.allocatedAmount),
+  );
   const closingBalance = roundMoney(realtimeOpeningBalance + currentReceivable - currentReceived);
   const grandTotal = roundMoney(realtimeOpeningBalance + currentReceivable);
 
@@ -134,13 +138,11 @@ export function summarizeStatementItem(
   store: ReconciliationStore,
 ): StatementItemSummary {
   const styleAccount = store.styleAccounts.find((account) => account.id === item.styleAccountId);
-  const invoicedAmount = styleAccount
-    ? sumMoney(
-        styleAccount.invoiceRecords
-          .filter((record) => getPeriodFromDate(record.date) === statement.periodMonth)
-          .map((record) => record.amount),
-      )
-    : 0;
+  const invoicedAmount = sumMoney(
+    (store.invoiceAllocations ?? [])
+      .filter((allocation) => allocation.statementId === statement.id && allocation.styleAccountId === item.styleAccountId)
+      .map((allocation) => allocation.allocatedAmount),
+  );
   const paidAmount = sumMoney(
     store.receiptAllocations
       .filter((allocation) => allocation.statementId === statement.id && allocation.styleAccountId === item.styleAccountId)
@@ -232,6 +234,10 @@ export function getRealtimeOpeningBalance(statement: MonthlyStatement, store: Re
 
 export function getReceiptAllocatedAmount(receiptId: string, allocations: ReceiptAllocation[]) {
   return sumMoney(allocations.filter((allocation) => allocation.receiptId === receiptId).map((allocation) => allocation.allocatedAmount));
+}
+
+export function getInvoiceAllocatedAmount(invoiceId: string, allocations: import("../models").InvoiceAllocation[]) {
+  return sumMoney(allocations.filter((allocation) => allocation.invoiceId === invoiceId).map((allocation) => allocation.allocatedAmount));
 }
 
 export function accountMatchesStatus(itemSummary: StatementItemSummary, status: AccountStatus | "") {

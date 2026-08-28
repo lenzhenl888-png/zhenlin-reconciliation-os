@@ -129,9 +129,31 @@ export type CustomerReceipt = {
   updatedAt: string;
 };
 
+export type CustomerInvoice = {
+  id: string;
+  customerId: string;
+  invoiceDate: string;
+  invoiceNo: string;
+  amount: number;
+  isLocked?: boolean;
+  note?: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type ReceiptAllocation = {
   id: string;
   receiptId: string;
+  customerId: string;
+  statementId: string;
+  styleAccountId?: string;
+  allocatedAmount: number;
+  note?: string;
+};
+
+export type InvoiceAllocation = {
+  id: string;
+  invoiceId: string;
   customerId: string;
   statementId: string;
   styleAccountId?: string;
@@ -164,6 +186,8 @@ export type ReconciliationStore = {
   statementAdjustments: StatementAdjustment[];
   customerReceipts: CustomerReceipt[];
   receiptAllocations: ReceiptAllocation[];
+  customerInvoices: CustomerInvoice[];
+  invoiceAllocations: InvoiceAllocation[];
 };
 
 export type StyleAccountSummary = {
