@@ -10,6 +10,7 @@ import {
   FileCog,
   FileDown,
   FileText,
+  Filter,
   Landmark,
   LayoutDashboard,
   Lock,
@@ -1531,7 +1532,10 @@ function CustomerStatementPanel(props: {
 }) {
   const [customerSearchText, setCustomerSearchText] = useState("");
   const styleTableRef = useRef<HTMLTableElement | null>(null);
-  const [styleColumnWidths, setStyleColumnWidths] = useState<number[] | null>(null);
+  const [styleColumnWidths, setStyleColumnWidths] = useState<number[] | null>(() =>
+    loadSpreadsheetGridColumnWidths(STYLE_GRID_COLUMN_WIDTHS_STORAGE_KEY, styleGridColumns.length),
+  );
+  const styleTableWidth = styleColumnWidths?.reduce((sum, width) => sum + width, 0) ?? 0;
   const customerButtonRefs = useRef<Record<string, HTMLButtonElement | null>>({});
   const matchedCustomerId = useMemo(() => {
     const keyword = customerSearchText.trim().toLowerCase();
@@ -1546,36 +1550,24 @@ function CustomerStatementPanel(props: {
     customerButtonRefs.current[matchedCustomerId]?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [matchedCustomerId]);
 
+  useEffect(() => {
+    if (!styleColumnWidths) return;
+    try {
+      window.localStorage.setItem(STYLE_GRID_COLUMN_WIDTHS_STORAGE_KEY, JSON.stringify(styleColumnWidths));
+    } catch {
+      // 列宽记录失败不影响款号对账使用。
+    }
+  }, [styleColumnWidths]);
+
   function beginStyleColumnResize(columnIndex: number, event: ReactPointerEvent<HTMLButtonElement>) {
-    event.preventDefault();
-    event.stopPropagation();
-    const table = styleTableRef.current;
-    if (!table || columnIndex >= 7) return;
-
-    const headers = Array.from(table.querySelectorAll<HTMLTableCellElement>("thead th"));
-    const initialWidths = styleColumnWidths ?? headers.map((header) => header.getBoundingClientRect().width);
-    const startX = event.clientX;
-    const minimumWidths = [126, 108, 116, 116, 88, 116, 160, 118];
-
-    const handlePointerMove = (moveEvent: PointerEvent) => {
-      const delta = moveEvent.clientX - startX;
-      const maxNegativeDelta = initialWidths[columnIndex] - minimumWidths[columnIndex];
-      const maxPositiveDelta = initialWidths[columnIndex + 1] - minimumWidths[columnIndex + 1];
-      const adjustedDelta = Math.max(-maxNegativeDelta, Math.min(maxPositiveDelta, delta));
-      const nextWidths = [...initialWidths];
-      nextWidths[columnIndex] = initialWidths[columnIndex] + adjustedDelta;
-      nextWidths[columnIndex + 1] = initialWidths[columnIndex + 1] - adjustedDelta;
-      setStyleColumnWidths(nextWidths);
-    };
-    const stopResize = () => {
-      document.removeEventListener("pointermove", handlePointerMove);
-      document.removeEventListener("pointerup", stopResize);
-      document.body.classList.remove("is-column-resizing");
-    };
-
-    document.body.classList.add("is-column-resizing");
-    document.addEventListener("pointermove", handlePointerMove);
-    document.addEventListener("pointerup", stopResize, { once: true });
+    beginSpreadsheetColumnResize(
+      styleTableRef.current,
+      styleColumnWidths,
+      styleGridColumns.map((column) => column.minWidth),
+      columnIndex,
+      event,
+      setStyleColumnWidths,
+    );
   }
 
   return (
@@ -1705,22 +1697,24 @@ function CustomerStatementPanel(props: {
           ) : (
             <>
               <div className="recon-table-wrap recon-style-table-wrap">
-                <table className="recon-table recon-style-table" ref={styleTableRef}>
-                  {styleColumnWidths && (
-                    <colgroup>
-                      {styleColumnWidths.map((width, index) => (
-                        <col key={index} style={{ width: `${width}px` }} />
-                      ))}
-                    </colgroup>
-                  )}
+                <table
+                  className="recon-table recon-style-table"
+                  ref={styleTableRef}
+                  style={{ minWidth: "100%", width: styleColumnWidths ? `${styleTableWidth}px` : "100%" }}
+                >
+                  <colgroup>
+                    {styleGridColumns.map((column, index) => (
+                      <col key={column.id} style={{ width: styleColumnWidths ? `${styleColumnWidths[index]}px` : column.width }} />
+                    ))}
+                  </colgroup>
                   <thead>
                     <tr>
-                      {["款号", "应收金额", "已开票金额", "已收款金额", "调整", "未收金额", "对账状态", "操作"].map((label, index) => (
-                        <th key={label}>
-                          <span>{label}</span>
-                          {index < 7 && (
+                      {styleGridColumns.map((column, index) => (
+                        <th key={column.id}>
+                          <span>{column.label}</span>
+                          {index < styleGridColumns.length - 1 && (
                             <button
-                              aria-label={`调整${label}列宽`}
+                              aria-label={`调整${column.label}列宽`}
                               className="recon-column-resizer"
                               onPointerDown={(event) => beginStyleColumnResize(index, event)}
                               title="拖动调整列宽"
@@ -2706,12 +2700,238 @@ function formatPeriodLabel(period: string) {
   return `${year}年${Number(month)}月`;
 }
 
+type SpreadsheetGridColumn<TColumnId extends string> = {
+  id: TColumnId;
+  label: string;
+  minWidth: number;
+  width: string;
+};
+
+type SpreadsheetGridRow<TColumnId extends string> = {
+  values: Record<TColumnId, string>;
+};
+
+function loadSpreadsheetGridColumnWidths(storageKey: string, expectedLength: number): number[] | null {
+  try {
+    const rawWidths = window.localStorage.getItem(storageKey);
+    if (!rawWidths) return null;
+    const widths = JSON.parse(rawWidths);
+    if (!Array.isArray(widths) || widths.length !== expectedLength) return null;
+    if (!widths.every((width) => typeof width === "number" && Number.isFinite(width) && width >= 72 && width <= 960)) return null;
+    return widths;
+  } catch {
+    return null;
+  }
+}
+
+function createSpreadsheetColumnQueries<TColumnId extends string>(columns: readonly SpreadsheetGridColumn<TColumnId>[]): Record<TColumnId, string> {
+  return columns.reduce<Record<TColumnId, string>>((queries, column) => {
+    queries[column.id] = "";
+    return queries;
+  }, {} as Record<TColumnId, string>);
+}
+
+function getSpreadsheetColumnValues<TColumnId extends string>(
+  columns: readonly SpreadsheetGridColumn<TColumnId>[],
+  rows: readonly SpreadsheetGridRow<TColumnId>[],
+): Record<TColumnId, string[]> {
+  return columns.reduce<Record<TColumnId, string[]>>((valuesByColumn, column) => {
+    valuesByColumn[column.id] = Array.from(new Set(rows.map((row) => row.values[column.id]))).sort((left, right) => left.localeCompare(right, "zh-CN"));
+    return valuesByColumn;
+  }, {} as Record<TColumnId, string[]>);
+}
+
+function beginSpreadsheetColumnResize(
+  table: HTMLTableElement | null,
+  storedWidths: number[] | null,
+  minimumWidths: number[],
+  columnIndex: number,
+  event: ReactPointerEvent<HTMLButtonElement>,
+  setWidths: (widths: number[]) => void,
+) {
+  event.preventDefault();
+  event.stopPropagation();
+  if (!table) return;
+
+  const headers = Array.from(table.querySelectorAll<HTMLTableCellElement>("thead tr:first-child th"));
+  const initialWidths = storedWidths ?? headers.map((header) => header.getBoundingClientRect().width);
+  const startX = event.clientX;
+  const scrollContainer = table.parentElement;
+  const initialScrollLeft = scrollContainer?.scrollLeft ?? 0;
+  const handlePointerMove = (moveEvent: PointerEvent) => {
+    const nextWidths = [...initialWidths];
+    nextWidths[columnIndex] = Math.max(minimumWidths[columnIndex], initialWidths[columnIndex] + moveEvent.clientX - startX);
+    setWidths(nextWidths);
+    window.requestAnimationFrame(() => {
+      if (scrollContainer) scrollContainer.scrollLeft = initialScrollLeft;
+    });
+  };
+  const stopResize = () => {
+    document.removeEventListener("pointermove", handlePointerMove);
+    document.removeEventListener("pointerup", stopResize);
+    document.body.classList.remove("is-column-resizing");
+  };
+
+  document.body.classList.add("is-column-resizing");
+  document.addEventListener("pointermove", handlePointerMove);
+  document.addEventListener("pointerup", stopResize, { once: true });
+}
+
+function SpreadsheetGridHeader<TColumnId extends string>(props: {
+  activeFilterColumn: TColumnId | null;
+  columnQueries: Record<TColumnId, string>;
+  columnSelections: Partial<Record<TColumnId, string[]>>;
+  columnValues: Record<TColumnId, string[]>;
+  columns: readonly SpreadsheetGridColumn<TColumnId>[];
+  filterPopoverRef: { current: HTMLDivElement | null };
+  filterValueSearch: string;
+  onBeginResize(columnIndex: number, event: ReactPointerEvent<HTMLButtonElement>): void;
+  onClearColumnFilter(columnId: TColumnId): void;
+  onColumnQueryChange(columnId: TColumnId, value: string): void;
+  onColumnSelectionChange(columnId: TColumnId, values: string[]): void;
+  onFilterValueSearchChange(value: string): void;
+  onToggleColumnFilter(columnId: TColumnId): void;
+  onToggleColumnValue(columnId: TColumnId, value: string): void;
+}) {
+  return (
+    <thead>
+      <tr className="receipt-grid-header-row">
+        {props.columns.map((column, index) => {
+          const values = props.columnValues[column.id];
+          const selectedValues = props.columnSelections[column.id] ?? values;
+          const isFiltered = Boolean(props.columnQueries[column.id] || (props.columnSelections[column.id] && selectedValues.length !== values.length));
+          const visibleValues = values.filter((value) => value.toLowerCase().includes(props.filterValueSearch.trim().toLowerCase()));
+          return (
+            <th key={column.id}>
+              <div className="receipt-grid-header-content" ref={props.activeFilterColumn === column.id ? props.filterPopoverRef : undefined}>
+                <span>{column.label}</span>
+                <button
+                  aria-label={`筛选${column.label}`}
+                  className={`receipt-grid-filter-button ${isFiltered ? "is-active" : ""}`}
+                  onClick={() => props.onToggleColumnFilter(column.id)}
+                  title={`筛选${column.label}`}
+                  type="button"
+                >
+                  <Filter size={14} />
+                </button>
+                {props.activeFilterColumn === column.id && (
+                  <div className="receipt-grid-filter-popover" role="dialog" aria-label={`筛选${column.label}`}>
+                    <div className="receipt-grid-filter-popover__head">
+                      <strong>{column.label}筛选</strong>
+                      <button onClick={() => props.onClearColumnFilter(column.id)} type="button">清除</button>
+                    </div>
+                    <input
+                      aria-label={`搜索${column.label}筛选值`}
+                      autoFocus
+                      onChange={(event) => props.onFilterValueSearchChange(event.target.value)}
+                      placeholder="搜索筛选值"
+                      value={props.filterValueSearch}
+                    />
+                    <label className="receipt-grid-filter-check receipt-grid-filter-check-all">
+                      <input
+                        checked={selectedValues.length === values.length}
+                        onChange={(event) => props.onColumnSelectionChange(column.id, event.target.checked ? values : [])}
+                        type="checkbox"
+                      />
+                      全部
+                    </label>
+                    <div className="receipt-grid-filter-values">
+                      {visibleValues.map((value) => (
+                        <label className="receipt-grid-filter-check" key={value}>
+                          <input checked={selectedValues.includes(value)} onChange={() => props.onToggleColumnValue(column.id, value)} type="checkbox" />
+                          <span title={value}>{value}</span>
+                        </label>
+                      ))}
+                      {visibleValues.length === 0 && <span className="receipt-grid-filter-empty">没有匹配项</span>}
+                    </div>
+                  </div>
+                )}
+              </div>
+              {index < props.columns.length - 1 && (
+                <button
+                  aria-label={`调整${column.label}列宽`}
+                  className="recon-column-resizer"
+                  onPointerDown={(event) => props.onBeginResize(index, event)}
+                  title="拖动调整列宽"
+                  type="button"
+                />
+              )}
+            </th>
+          );
+        })}
+      </tr>
+      <tr className="receipt-grid-filter-row">
+        {props.columns.map((column) => (
+          <th key={column.id}>
+            <input
+              aria-label={`快速筛选${column.label}`}
+              onChange={(event) => props.onColumnQueryChange(column.id, event.target.value)}
+              placeholder="筛选"
+              value={props.columnQueries[column.id]}
+            />
+          </th>
+        ))}
+      </tr>
+    </thead>
+  );
+}
+
+type OverviewGridColumnId = "customer" | "periodMonth" | "status" | "styleCount" | "receivable" | "invoiced" | "received" | "closingBalance";
+
+const overviewGridColumns: Array<SpreadsheetGridColumn<OverviewGridColumnId>> = [
+  { id: "customer", label: "客户", minWidth: 160, width: "18%" },
+  { id: "periodMonth", label: "对账月份", minWidth: 132, width: "11%" },
+  { id: "status", label: "状态", minWidth: 112, width: "8%" },
+  { id: "styleCount", label: "款号数量", minWidth: 112, width: "10%" },
+  { id: "receivable", label: "本月应收", minWidth: 146, width: "14%" },
+  { id: "invoiced", label: "已开票", minWidth: 136, width: "13%" },
+  { id: "received", label: "已收款", minWidth: 136, width: "13%" },
+  { id: "closingBalance", label: "期末余额", minWidth: 146, width: "13%" },
+];
+
+type InvoiceGridColumnId = "customer" | "styleNos" | "invoiceDate" | "invoiceNo" | "amount" | "note";
+
+const invoiceGridColumns: Array<SpreadsheetGridColumn<InvoiceGridColumnId>> = [
+  { id: "customer", label: "客户", minWidth: 155, width: "17%" },
+  { id: "styleNos", label: "款号", minWidth: 175, width: "19%" },
+  { id: "invoiceDate", label: "开票日期", minWidth: 140, width: "15%" },
+  { id: "invoiceNo", label: "发票号码", minWidth: 175, width: "19%" },
+  { id: "amount", label: "开票金额", minWidth: 145, width: "16%" },
+  { id: "note", label: "备注", minWidth: 170, width: "14%" },
+];
+
+type StyleGridColumnId = "styleNo" | "receivable" | "invoiced" | "received" | "adjustment" | "unpaid" | "status" | "actions";
+
+const styleGridColumns: Array<SpreadsheetGridColumn<StyleGridColumnId>> = [
+  { id: "styleNo", label: "款号", minWidth: 150, width: "15%" },
+  { id: "receivable", label: "应收金额", minWidth: 140, width: "14%" },
+  { id: "invoiced", label: "已开票金额", minWidth: 136, width: "13%" },
+  { id: "received", label: "已收款金额", minWidth: 136, width: "13%" },
+  { id: "adjustment", label: "调整", minWidth: 112, width: "10%" },
+  { id: "unpaid", label: "未收金额", minWidth: 136, width: "13%" },
+  { id: "status", label: "对账状态", minWidth: 172, width: "14%" },
+  { id: "actions", label: "操作", minWidth: 118, width: "8%" },
+];
+
+const OVERVIEW_GRID_COLUMN_WIDTHS_STORAGE_KEY = "zhenlin-reconciliation.overview-grid-widths.v1";
+const INVOICE_GRID_COLUMN_WIDTHS_STORAGE_KEY = "zhenlin-reconciliation.invoice-grid-widths.v1";
+const STYLE_GRID_COLUMN_WIDTHS_STORAGE_KEY = "zhenlin-reconciliation.style-grid-widths.v1";
+
 function OverviewModule(props: { customers: Customer[]; store: Parameters<typeof summarizeAll>[1]; summary: ReturnType<typeof summarizeAll> }) {
   const [customerId, setCustomerId] = useState("");
   const periodRange = getAvailablePeriods(props.store);
   const [periodFrom, setPeriodFrom] = useState(periodRange[periodRange.length - 1] ?? "");
   const [periodTo, setPeriodTo] = useState(periodRange[0] ?? "");
   const [status, setStatus] = useState<StatementStatus | "">("");
+  const [columnQueries, setColumnQueries] = useState<Record<OverviewGridColumnId, string>>(() => createSpreadsheetColumnQueries(overviewGridColumns));
+  const [columnSelections, setColumnSelections] = useState<Partial<Record<OverviewGridColumnId, string[]>>>({});
+  const [activeFilterColumn, setActiveFilterColumn] = useState<OverviewGridColumnId | null>(null);
+  const [filterValueSearch, setFilterValueSearch] = useState("");
+  const [overviewColumnWidths, setOverviewColumnWidths] = useState<number[] | null>(() =>
+    loadSpreadsheetGridColumnWidths(OVERVIEW_GRID_COLUMN_WIDTHS_STORAGE_KEY, overviewGridColumns.length),
+  );
+  const overviewTableRef = useRef<HTMLTableElement | null>(null);
+  const overviewFilterPopoverRef = useRef<HTMLDivElement | null>(null);
   const periodOptions = getAvailablePeriods(props.store);
   const orderedPeriods = [...periodOptions].sort();
   const effectiveFrom = periodFrom || orderedPeriods[0] || "";
@@ -2732,8 +2952,80 @@ function OverviewModule(props: { customers: Customer[]; store: Parameters<typeof
     paidTotal: sumMoney(statementSummaries.map((item) => item.currentReceived)),
     unpaidAmount: sumMoney(statementSummaries.map((item) => item.closingBalance)),
   };
-  const overviewHeaderTitle = customerId ? props.customers.find((customer) => customer.id === customerId)?.name ?? "当前客户" : "全部客户";
+  const overviewRows: Array<SpreadsheetGridRow<OverviewGridColumnId> & { summary: (typeof statementSummaries)[number] }> = statementSummaries.map((summary) => ({
+    summary,
+    values: {
+      customer: getCustomerDisplayName(summary.statement.customerId, props.store),
+      periodMonth: summary.statement.periodMonth,
+      status: summary.status,
+      styleCount: String(summary.items.length),
+      receivable: formatMoney(summary.currentReceivable),
+      invoiced: formatMoney(summary.currentInvoiced),
+      received: formatMoney(summary.currentReceived),
+      closingBalance: formatMoney(summary.closingBalance),
+    },
+  }));
+  const overviewColumnValues = getSpreadsheetColumnValues(overviewGridColumns, overviewRows);
+  const visibleOverviewRows = overviewRows.filter((row) =>
+    overviewGridColumns.every((column) => {
+      const query = columnQueries[column.id].trim().toLowerCase();
+      const selection = columnSelections[column.id];
+      const value = row.values[column.id];
+      return (!query || value.toLowerCase().includes(query)) && (!selection || selection.includes(value));
+    }),
+  );
+  const visibleOverviewSummary = {
+    receivableTotal: sumMoney(visibleOverviewRows.map((row) => row.summary.currentReceivable)),
+    invoicedTotal: sumMoney(visibleOverviewRows.map((row) => row.summary.currentInvoiced)),
+    paidTotal: sumMoney(visibleOverviewRows.map((row) => row.summary.currentReceived)),
+    unpaidAmount: sumMoney(visibleOverviewRows.map((row) => row.summary.closingBalance)),
+  };
+  const overviewTableWidth = overviewColumnWidths?.reduce((sum, width) => sum + width, 0) ?? 1170;
 
+  useEffect(() => {
+    if (!activeFilterColumn) return;
+    const closeFilterPopover = (event: MouseEvent) => {
+      if (!overviewFilterPopoverRef.current?.contains(event.target as Node)) setActiveFilterColumn(null);
+    };
+    document.addEventListener("mousedown", closeFilterPopover);
+    return () => document.removeEventListener("mousedown", closeFilterPopover);
+  }, [activeFilterColumn]);
+
+  useEffect(() => {
+    if (!overviewColumnWidths) return;
+    try {
+      window.localStorage.setItem(OVERVIEW_GRID_COLUMN_WIDTHS_STORAGE_KEY, JSON.stringify(overviewColumnWidths));
+    } catch {
+      // 列宽记录失败不影响对账总览使用。
+    }
+  }, [overviewColumnWidths]);
+
+  function setOverviewColumnQuery(columnId: OverviewGridColumnId, value: string) {
+    setColumnQueries((current) => ({ ...current, [columnId]: value }));
+  }
+
+  function setOverviewColumnSelection(columnId: OverviewGridColumnId, values: string[]) {
+    setColumnSelections((current) => ({ ...current, [columnId]: values }));
+  }
+
+  function toggleOverviewColumnValue(columnId: OverviewGridColumnId, value: string) {
+    const allValues = overviewColumnValues[columnId];
+    setColumnSelections((current) => {
+      const selectedValues = new Set(current[columnId] ?? allValues);
+      if (selectedValues.has(value)) selectedValues.delete(value);
+      else selectedValues.add(value);
+      return { ...current, [columnId]: Array.from(selectedValues) };
+    });
+  }
+
+  function clearOverviewColumnFilter(columnId: OverviewGridColumnId) {
+    setOverviewColumnQuery(columnId, "");
+    setColumnSelections((current) => {
+      const { [columnId]: _discarded, ...remaining } = current;
+      return remaining;
+    });
+    setFilterValueSearch("");
+  }
   return (
     <div className="recon-workspace">
       <section className="recon-stat-grid">
@@ -2743,119 +3035,200 @@ function OverviewModule(props: { customers: Customer[]; store: Parameters<typeof
         <StatCard label="未收余额" value={filteredSummary.unpaidAmount} icon={BarChart3} tone="warning" />
       </section>
       <section className="recon-simple-panel records-fill-page overview-records-page">
-        <div className="recon-panel-head">
-          <div>
-            <strong>{overviewHeaderTitle}</strong>
+        <div className="recon-panel-head overview-records-head">
+          <div className="module-filter-grid module-filter-grid-wide overview-records-filter-grid">
+            <label>
+              客户
+              <SearchableSelect
+                ariaLabel="客户"
+                emptyText="无匹配客户"
+                onChange={setCustomerId}
+                options={[{ label: "全部客户", value: "" }, ...props.customers.map((customer) => ({ label: customer.name, value: customer.id }))]}
+                placeholder="全部客户"
+                value={customerId}
+              />
+            </label>
+            <label>
+              对账月份
+              <div className="module-filter-range">
+                <AnimatedSelect
+                  ariaLabel="起始月份"
+                  onChange={(value) => {
+                    setPeriodFrom(value);
+                    if (effectiveTo && value > effectiveTo) setPeriodTo(value);
+                  }}
+                  options={orderedPeriods.map((period) => ({ label: formatPeriodLabel(period), value: period }))}
+                  value={effectiveFrom}
+                />
+                <span className="module-filter-range-sep">至</span>
+                <AnimatedSelect
+                  ariaLabel="截止月份"
+                  onChange={(value) => {
+                    setPeriodTo(value);
+                    if (effectiveFrom && value < effectiveFrom) setPeriodFrom(value);
+                  }}
+                  options={orderedPeriods.map((period) => ({ label: formatPeriodLabel(period), value: period }))}
+                  value={effectiveTo}
+                />
+              </div>
+            </label>
+            <label>
+              状态
+              <AnimatedSelect
+                ariaLabel="状态"
+                onChange={(value) => setStatus(value as StatementStatus | "")}
+                options={[{ label: "全部状态", value: "" }, ...toSelectOptions(statementStatusOptions)]}
+                value={status}
+              />
+            </label>
+            <button
+              className="recon-button recon-button-light"
+              onClick={() => {
+                setCustomerId("");
+                setPeriodFrom(orderedPeriods[0] ?? "");
+                setPeriodTo(orderedPeriods[orderedPeriods.length - 1] ?? "");
+                setStatus("");
+                setColumnQueries(createSpreadsheetColumnQueries(overviewGridColumns));
+                setColumnSelections({});
+                setActiveFilterColumn(null);
+              }}
+              type="button"
+            >
+              重置
+            </button>
           </div>
         </div>
-        <div className="module-filter-grid module-filter-grid-wide">
-          <label>
-            客户
-            <SearchableSelect
-              ariaLabel="客户"
-              emptyText="无匹配客户"
-              onChange={setCustomerId}
-              options={[{ label: "全部客户", value: "" }, ...props.customers.map((customer) => ({ label: customer.name, value: customer.id }))]}
-              placeholder="全部客户"
-              value={customerId}
-            />
-          </label>
-          <label>
-            对账月份
-            <div className="module-filter-range">
-              <AnimatedSelect
-                ariaLabel="起始月份"
-                onChange={(value) => {
-                  setPeriodFrom(value);
-                  if (effectiveTo && value > effectiveTo) setPeriodTo(value);
-                }}
-                options={orderedPeriods.map((period) => ({ label: formatPeriodLabel(period), value: period }))}
-                value={effectiveFrom}
-              />
-              <span className="module-filter-range-sep">至</span>
-              <AnimatedSelect
-                ariaLabel="截止月份"
-                onChange={(value) => {
-                  setPeriodTo(value);
-                  if (effectiveFrom && value < effectiveFrom) setPeriodFrom(value);
-                }}
-                options={orderedPeriods.map((period) => ({ label: formatPeriodLabel(period), value: period }))}
-                value={effectiveTo}
-              />
-            </div>
-          </label>
-          <label>
-            状态
-            <AnimatedSelect
-              ariaLabel="状态"
-              onChange={(value) => setStatus(value as StatementStatus | "")}
-              options={[{ label: "全部状态", value: "" }, ...toSelectOptions(statementStatusOptions)]}
-              value={status}
-            />
-          </label>
-          <button
-            className="recon-button recon-button-light"
-            onClick={() => {
-              setCustomerId("");
-              setPeriodFrom(orderedPeriods[0] ?? "");
-              setPeriodTo(orderedPeriods[orderedPeriods.length - 1] ?? "");
-              setStatus("");
-            }}
-            type="button"
+        <div className="receipt-grid-scroll overview-grid-scroll">
+          <table
+            className="recon-table recon-table-stable receipt-grid-table overview-grid-table"
+            ref={overviewTableRef}
+            style={{ minWidth: "100%", width: overviewColumnWidths ? `${overviewTableWidth}px` : "100%" }}
           >
-            重置
-          </button>
+            <colgroup>
+              {overviewGridColumns.map((column, index) => (
+                <col key={column.id} style={{ width: overviewColumnWidths ? `${overviewColumnWidths[index]}px` : column.width }} />
+              ))}
+            </colgroup>
+            <SpreadsheetGridHeader
+              activeFilterColumn={activeFilterColumn}
+              columnQueries={columnQueries}
+              columnSelections={columnSelections}
+              columnValues={overviewColumnValues}
+              columns={overviewGridColumns}
+              filterPopoverRef={overviewFilterPopoverRef}
+              filterValueSearch={filterValueSearch}
+              onBeginResize={(columnIndex, event) =>
+                beginSpreadsheetColumnResize(
+                  overviewTableRef.current,
+                  overviewColumnWidths,
+                  overviewGridColumns.map((column) => column.minWidth),
+                  columnIndex,
+                  event,
+                  setOverviewColumnWidths,
+                )
+              }
+              onClearColumnFilter={clearOverviewColumnFilter}
+              onColumnQueryChange={setOverviewColumnQuery}
+              onColumnSelectionChange={setOverviewColumnSelection}
+              onFilterValueSearchChange={setFilterValueSearch}
+              onToggleColumnFilter={(columnId) => {
+                setActiveFilterColumn((current) => (current === columnId ? null : columnId));
+                setFilterValueSearch("");
+              }}
+              onToggleColumnValue={toggleOverviewColumnValue}
+            />
+            <tbody>
+              {visibleOverviewRows.map(({ summary }) => (
+                <tr key={summary.statement.id}>
+                  <td>{getCustomerDisplayName(summary.statement.customerId, props.store)}</td>
+                  <td>{summary.statement.periodMonth}</td>
+                  <td>{summary.status}</td>
+                  <td>{summary.items.length}</td>
+                  <td>¥ {formatMoney(summary.currentReceivable)}</td>
+                  <td>¥ {formatMoney(summary.currentInvoiced)}</td>
+                  <td>¥ {formatMoney(summary.currentReceived)}</td>
+                  <td className={summary.closingBalance > 0 ? "is-danger" : "is-ok"}>¥ {formatMoney(summary.closingBalance)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-        <table className="recon-table recon-table-stable">
-          <colgroup>
-            <col style={{ width: "18%" }} />
-            <col style={{ width: "11%" }} />
-            <col style={{ width: "8%" }} />
-            <col style={{ width: "10%" }} />
-            <col style={{ width: "14%" }} />
-            <col style={{ width: "13%" }} />
-            <col style={{ width: "13%" }} />
-            <col style={{ width: "13%" }} />
-          </colgroup>
-          <thead>
-            <tr>
-              <th>客户</th>
-              <th>对账月份</th>
-              <th>状态</th>
-              <th>款号数量</th>
-              <th>本月应收</th>
-              <th>已开票</th>
-              <th>已收款</th>
-              <th>期末余额</th>
-            </tr>
-          </thead>
-          <tbody>
-            {statementSummaries.map((row) => (
-              <tr key={row.statement.id}>
-                <td>{getCustomerDisplayName(row.statement.customerId, props.store)}</td>
-                <td>{row.statement.periodMonth}</td>
-                <td>{row.status}</td>
-                <td>{row.items.length}</td>
-                <td>¥ {formatMoney(row.currentReceivable)}</td>
-                <td>¥ {formatMoney(row.currentInvoiced)}</td>
-                <td>¥ {formatMoney(row.currentReceived)}</td>
-                <td className={row.closingBalance > 0 ? "is-danger" : "is-ok"}>¥ {formatMoney(row.closingBalance)}</td>
-              </tr>
-            ))}
-          </tbody>
-          <tfoot>
-            <tr>
-              <td colSpan={4}>当前合计</td>
-              <td>¥ {formatMoney(filteredSummary.receivableTotal)}</td>
-              <td>¥ {formatMoney(filteredSummary.invoicedTotal)}</td>
-              <td>¥ {formatMoney(filteredSummary.paidTotal)}</td>
-              <td className={filteredSummary.unpaidAmount > 0 ? "is-danger" : "is-ok"}>¥ {formatMoney(filteredSummary.unpaidAmount)}</td>
-            </tr>
-          </tfoot>
-        </table>
+        <footer className="receipt-grid-summary overview-grid-summary" aria-label="当前对账合计">
+          <strong>当前合计</strong>
+          <div>
+            <span>本月应收 <b>¥ {formatMoney(visibleOverviewSummary.receivableTotal)}</b></span>
+            <span>已开票 <b>¥ {formatMoney(visibleOverviewSummary.invoicedTotal)}</b></span>
+            <span>已收款 <b>¥ {formatMoney(visibleOverviewSummary.paidTotal)}</b></span>
+            <span className={visibleOverviewSummary.unpaidAmount > 0 ? "is-danger" : "is-ok"}>期末余额 <b>¥ {formatMoney(visibleOverviewSummary.unpaidAmount)}</b></span>
+          </div>
+        </footer>
       </section>
     </div>
   );
+}
+
+type ReceiptGridColumnId =
+  | "customer"
+  | "receiptDate"
+  | "amount"
+  | "allocated"
+  | "unallocated"
+  | "method"
+  | "transactionNo"
+  | "note"
+  | "actions";
+
+type ReceiptGridFilterColumnId = Exclude<ReceiptGridColumnId, "actions">;
+
+type ReceiptGridRow = {
+  allocated: number;
+  receipt: CustomerReceipt;
+  unallocated: number;
+  values: Record<ReceiptGridFilterColumnId, string>;
+};
+
+const receiptGridColumns: Array<{ id: ReceiptGridColumnId; label: string; width: string }> = [
+  { id: "customer", label: "客户", width: "12%" },
+  { id: "receiptDate", label: "收款日期", width: "12%" },
+  { id: "amount", label: "收款金额", width: "14%" },
+  { id: "allocated", label: "已分配", width: "12%" },
+  { id: "unallocated", label: "未分配", width: "12%" },
+  { id: "method", label: "收款方式", width: "10%" },
+  { id: "transactionNo", label: "流水号", width: "12%" },
+  { id: "note", label: "备注", width: "9%" },
+  { id: "actions", label: "操作", width: "7%" },
+];
+
+const RECEIPT_GRID_COLUMN_WIDTHS_STORAGE_KEY = "zhenlin-reconciliation.receipt-grid-widths.v1";
+
+function loadReceiptGridColumnWidths(): number[] | null {
+  try {
+    const rawWidths = window.localStorage.getItem(RECEIPT_GRID_COLUMN_WIDTHS_STORAGE_KEY);
+    if (!rawWidths) return null;
+    const widths = JSON.parse(rawWidths);
+    if (!Array.isArray(widths) || widths.length !== receiptGridColumns.length) return null;
+    if (!widths.every((width) => typeof width === "number" && Number.isFinite(width) && width >= 72 && width <= 960)) return null;
+    return widths;
+  } catch {
+    return null;
+  }
+}
+
+const receiptGridFilterColumns = receiptGridColumns.filter(
+  (column): column is { id: ReceiptGridFilterColumnId; label: string; width: string } => column.id !== "actions",
+);
+
+function createEmptyReceiptColumnQueries(): Record<ReceiptGridFilterColumnId, string> {
+  return {
+    customer: "",
+    receiptDate: "",
+    amount: "",
+    allocated: "",
+    unallocated: "",
+    method: "",
+    transactionNo: "",
+    note: "",
+  };
 }
 
 function ReceiptPoolModule(props: {
@@ -2873,18 +3246,23 @@ function ReceiptPoolModule(props: {
   const [keyword, setKeyword] = useState("");
   const [editingReceipt, setEditingReceipt] = useState<CustomerReceipt | null>(null);
   const [pendingDeleteReceipt, setPendingDeleteReceipt] = useState<CustomerReceipt | null>(null);
-  const filteredReceipts = selectedCustomerId
+  const [columnQueries, setColumnQueries] = useState<Record<ReceiptGridFilterColumnId, string>>(createEmptyReceiptColumnQueries);
+  const [columnSelections, setColumnSelections] = useState<Partial<Record<ReceiptGridFilterColumnId, string[]>>>({});
+  const [activeFilterColumn, setActiveFilterColumn] = useState<ReceiptGridFilterColumnId | null>(null);
+  const [filterValueSearch, setFilterValueSearch] = useState("");
+  const [receiptColumnWidths, setReceiptColumnWidths] = useState<number[] | null>(loadReceiptGridColumnWidths);
+  const receiptTableRef = useRef<HTMLTableElement | null>(null);
+  const receiptFilterPopoverRef = useRef<HTMLDivElement | null>(null);
+
+  const customerFilteredReceipts = selectedCustomerId
     ? props.receipts.filter((receipt) => receipt.customerId === selectedCustomerId)
     : props.receipts;
-  const visibleReceipts = filteredReceipts.filter((receipt) => {
+  const filteredReceipts = customerFilteredReceipts.filter((receipt) => {
     const text = `${receipt.transactionNo ?? ""} ${receipt.note ?? ""}`.toLowerCase();
     const matchesMethod = !method || receipt.method === method;
     const matchesKeyword = !keyword.trim() || text.includes(keyword.trim().toLowerCase());
     return matchesMethod && matchesKeyword;
   });
-  const totalAmount = visibleReceipts.reduce((sum, receipt) => sum + receipt.amount, 0);
-  const totalAllocated = visibleReceipts.reduce((sum, receipt) => sum + getReceiptAllocatedAmount(receipt.id, props.allocations), 0);
-  const totalUnallocated = totalAmount - totalAllocated;
 
   function getReceiptCustomerName(customerId: string) {
     const customer = props.customers.find((item) => item.id === customerId);
@@ -2892,7 +3270,122 @@ function ReceiptPoolModule(props: {
     return profile?.shortName || profile?.fullName || customer?.name || "-";
   }
 
-  const receiptHeaderTitle = selectedCustomerId ? getReceiptCustomerName(selectedCustomerId) : "全部客户";
+  const receiptRows: ReceiptGridRow[] = filteredReceipts.map((receipt) => {
+    const allocated = getReceiptAllocatedAmount(receipt.id, props.allocations);
+    const unallocated = roundMoney(receipt.amount - allocated);
+    return {
+      receipt,
+      allocated,
+      unallocated,
+      values: {
+        customer: getReceiptCustomerName(receipt.customerId),
+        receiptDate: receipt.receiptDate,
+        amount: formatMoney(receipt.amount),
+        allocated: formatMoney(allocated),
+        unallocated: formatMoney(unallocated),
+        method: receipt.method,
+        transactionNo: receipt.transactionNo || "-",
+        note: receipt.note || "-",
+      },
+    };
+  });
+  const receiptColumnValues = receiptGridFilterColumns.reduce<Record<ReceiptGridFilterColumnId, string[]>>(
+    (result, column) => {
+      result[column.id] = Array.from(new Set(receiptRows.map((row) => row.values[column.id]))).sort((left, right) => left.localeCompare(right, "zh-CN"));
+      return result;
+    },
+    {} as Record<ReceiptGridFilterColumnId, string[]>,
+  );
+  const visibleReceiptRows = receiptRows.filter((row) =>
+    receiptGridFilterColumns.every((column) => {
+      const query = columnQueries[column.id].trim().toLowerCase();
+      const selection = columnSelections[column.id];
+      const value = row.values[column.id];
+      return (!query || value.toLowerCase().includes(query)) && (!selection || selection.includes(value));
+    }),
+  );
+  const totalAmount = visibleReceiptRows.reduce((sum, row) => sum + row.receipt.amount, 0);
+  const totalAllocated = visibleReceiptRows.reduce((sum, row) => sum + row.allocated, 0);
+  const totalUnallocated = visibleReceiptRows.reduce((sum, row) => sum + row.unallocated, 0);
+  const receiptTableWidth = receiptColumnWidths?.reduce((sum, width) => sum + width, 0) ?? 1348;
+
+  useEffect(() => {
+    if (!activeFilterColumn) return;
+    const closeFilterPopover = (event: MouseEvent) => {
+      if (!receiptFilterPopoverRef.current?.contains(event.target as Node)) {
+        setActiveFilterColumn(null);
+      }
+    };
+    document.addEventListener("mousedown", closeFilterPopover);
+    return () => document.removeEventListener("mousedown", closeFilterPopover);
+  }, [activeFilterColumn]);
+
+  useEffect(() => {
+    if (!receiptColumnWidths) return;
+    try {
+      window.localStorage.setItem(RECEIPT_GRID_COLUMN_WIDTHS_STORAGE_KEY, JSON.stringify(receiptColumnWidths));
+    } catch {
+      // 列宽记录失败不影响日常收款操作。
+    }
+  }, [receiptColumnWidths]);
+
+  function beginReceiptColumnResize(columnIndex: number, event: ReactPointerEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    event.stopPropagation();
+    const table = receiptTableRef.current;
+    if (!table) return;
+
+    const headers = Array.from(table.querySelectorAll<HTMLTableCellElement>("thead tr:first-child th"));
+    const initialWidths = receiptColumnWidths ?? headers.map((header) => header.getBoundingClientRect().width);
+    const minimumWidths = [126, 126, 132, 118, 118, 112, 150, 160, 118];
+    const startX = event.clientX;
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      const nextWidths = [...initialWidths];
+      nextWidths[columnIndex] = Math.max(minimumWidths[columnIndex], initialWidths[columnIndex] + moveEvent.clientX - startX);
+      setReceiptColumnWidths(nextWidths);
+    };
+    const stopResize = () => {
+      document.removeEventListener("pointermove", handlePointerMove);
+      document.removeEventListener("pointerup", stopResize);
+      document.body.classList.remove("is-column-resizing");
+    };
+
+    document.body.classList.add("is-column-resizing");
+    document.addEventListener("pointermove", handlePointerMove);
+    document.addEventListener("pointerup", stopResize, { once: true });
+  }
+
+  function setReceiptColumnQuery(columnId: ReceiptGridFilterColumnId, value: string) {
+    setColumnQueries((current) => ({ ...current, [columnId]: value }));
+  }
+
+  function toggleReceiptColumnFilter(columnId: ReceiptGridFilterColumnId) {
+    setActiveFilterColumn((current) => (current === columnId ? null : columnId));
+    setFilterValueSearch("");
+  }
+
+  function setReceiptColumnSelection(columnId: ReceiptGridFilterColumnId, values: string[]) {
+    setColumnSelections((current) => ({ ...current, [columnId]: values }));
+  }
+
+  function toggleReceiptColumnValue(columnId: ReceiptGridFilterColumnId, value: string) {
+    const allValues = receiptColumnValues[columnId];
+    setColumnSelections((current) => {
+      const selectedValues = new Set(current[columnId] ?? allValues);
+      if (selectedValues.has(value)) selectedValues.delete(value);
+      else selectedValues.add(value);
+      return { ...current, [columnId]: Array.from(selectedValues) };
+    });
+  }
+
+  function clearReceiptColumnFilter(columnId: ReceiptGridFilterColumnId) {
+    setReceiptColumnQuery(columnId, "");
+    setColumnSelections((current) => {
+      const { [columnId]: _discarded, ...remaining } = current;
+      return remaining;
+    });
+    setFilterValueSearch("");
+  }
 
   async function importReceiptFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -2909,9 +3402,46 @@ function ReceiptPoolModule(props: {
 
   return (
     <section className="recon-simple-panel records-fill-page receipt-records-page">
-      <div className="recon-panel-head">
-        <div>
-          <strong>{receiptHeaderTitle}</strong>
+      <div className="recon-panel-head receipt-records-head">
+        <div className="module-filter-grid receipt-records-filter-grid">
+          <label>
+            客户
+            <SearchableSelect
+              ariaLabel="客户"
+              emptyText="无匹配客户"
+              onChange={setSelectedCustomerId}
+              options={[{ label: "全部客户", value: "" }, ...props.customers.map((customer) => ({ label: getReceiptCustomerName(customer.id), value: customer.id }))]}
+              placeholder="全部客户"
+              value={selectedCustomerId}
+            />
+          </label>
+          <label>
+            收款方式
+            <AnimatedSelect
+              ariaLabel="收款方式"
+              onChange={(value) => setMethod(value as PaymentMethod | "")}
+              options={[{ label: "全部方式", value: "" }, ...toSelectOptions(paymentMethods)]}
+              value={method}
+            />
+          </label>
+          <label>
+            流水号 / 备注
+            <input onChange={(event) => setKeyword(event.target.value)} placeholder="输入关键词" value={keyword} />
+          </label>
+          <button
+            className="recon-button recon-button-light"
+            onClick={() => {
+              setSelectedCustomerId("");
+              setMethod("");
+              setKeyword("");
+              setColumnQueries(createEmptyReceiptColumnQueries());
+              setColumnSelections({});
+              setActiveFilterColumn(null);
+            }}
+            type="button"
+          >
+            重置
+          </button>
         </div>
         <label className="recon-button recon-button-primary payment-import-trigger">
           <Upload size={16} />
@@ -2919,78 +3449,119 @@ function ReceiptPoolModule(props: {
           <input accept=".xlsx,.csv" onChange={importReceiptFile} type="file" />
         </label>
       </div>
-      <div className="module-filter-grid">
-        <label>
-          客户
-          <SearchableSelect
-            ariaLabel="客户"
-            emptyText="无匹配客户"
-            onChange={setSelectedCustomerId}
-            options={[{ label: "全部客户", value: "" }, ...props.customers.map((customer) => ({ label: getReceiptCustomerName(customer.id), value: customer.id }))]}
-            placeholder="全部客户"
-            value={selectedCustomerId}
-          />
-        </label>
-        <label>
-          收款方式
-          <AnimatedSelect
-            ariaLabel="收款方式"
-            onChange={(value) => setMethod(value as PaymentMethod | "")}
-            options={[{ label: "全部方式", value: "" }, ...toSelectOptions(paymentMethods)]}
-            value={method}
-          />
-        </label>
-        <label>
-          流水号 / 备注
-          <input onChange={(event) => setKeyword(event.target.value)} placeholder="输入关键词" value={keyword} />
-        </label>
-        <button
-          className="recon-button recon-button-light"
-          onClick={() => {
-            setSelectedCustomerId("");
-            setMethod("");
-            setKeyword("");
-          }}
-          type="button"
+      <div className="receipt-grid-scroll">
+        <table
+          className="recon-table recon-table-stable receipt-grid-table"
+          ref={receiptTableRef}
+          style={{ minWidth: "100%", width: receiptColumnWidths ? `${receiptTableWidth}px` : "100%" }}
         >
-          重置
-        </button>
-      </div>
-      <table className="recon-table recon-table-stable">
-        <colgroup>
-          <col style={{ width: "12%" }} />
-          <col style={{ width: "12%" }} />
-          <col style={{ width: "14%" }} />
-          <col style={{ width: "12%" }} />
-          <col style={{ width: "12%" }} />
-          <col style={{ width: "10%" }} />
-          <col style={{ width: "12%" }} />
-          <col style={{ width: "9%" }} />
-          <col style={{ width: "7%" }} />
-        </colgroup>
-        <thead>
-          <tr>
-            <th>客户</th>
-            <th>收款日期</th>
-            <th>收款金额</th>
-            <th>已分配</th>
-            <th>未分配</th>
-            <th>收款方式</th>
-            <th>流水号</th>
-            <th>备注</th>
-            <th>操作</th>
-          </tr>
-        </thead>
-        <tbody>
-          {visibleReceipts.map((receipt) => {
-            const allocated = getReceiptAllocatedAmount(receipt.id, props.allocations);
-            return (
+          <colgroup>
+            {receiptGridColumns.map((column, index) => (
+              <col key={column.id} style={{ width: receiptColumnWidths ? `${receiptColumnWidths[index]}px` : column.width }} />
+            ))}
+          </colgroup>
+          <thead>
+            <tr className="receipt-grid-header-row">
+              {receiptGridColumns.map((column, index) => {
+                const filterColumn = column.id === "actions" ? undefined : column.id;
+                const values = filterColumn ? receiptColumnValues[filterColumn] : [];
+                const selectedValues = filterColumn ? columnSelections[filterColumn] ?? values : [];
+                const isFiltered = Boolean(
+                  filterColumn &&
+                    (columnQueries[filterColumn] || (columnSelections[filterColumn] && selectedValues.length !== values.length)),
+                );
+                const visibleValues = values.filter((value) => value.toLowerCase().includes(filterValueSearch.trim().toLowerCase()));
+                return (
+                  <th key={column.id}>
+                    <div className="receipt-grid-header-content" ref={activeFilterColumn === filterColumn ? receiptFilterPopoverRef : undefined}>
+                      <span>{column.label}</span>
+                      {filterColumn && (
+                        <button
+                          aria-label={`筛选${column.label}`}
+                          className={`receipt-grid-filter-button ${isFiltered ? "is-active" : ""}`}
+                          onClick={() => toggleReceiptColumnFilter(filterColumn)}
+                          title={`筛选${column.label}`}
+                          type="button"
+                        >
+                          <Filter size={14} />
+                        </button>
+                      )}
+                      {filterColumn && activeFilterColumn === filterColumn && (
+                        <div className="receipt-grid-filter-popover" role="dialog" aria-label={`筛选${column.label}`}>
+                          <div className="receipt-grid-filter-popover__head">
+                            <strong>{column.label}筛选</strong>
+                            <button onClick={() => clearReceiptColumnFilter(filterColumn)} type="button">清除</button>
+                          </div>
+                          <input
+                            aria-label={`搜索${column.label}筛选值`}
+                            autoFocus
+                            onChange={(event) => setFilterValueSearch(event.target.value)}
+                            placeholder="搜索筛选值"
+                            value={filterValueSearch}
+                          />
+                          <label className="receipt-grid-filter-check receipt-grid-filter-check-all">
+                            <input
+                              checked={selectedValues.length === values.length}
+                              onChange={(event) => setReceiptColumnSelection(filterColumn, event.target.checked ? values : [])}
+                              type="checkbox"
+                            />
+                            全部
+                          </label>
+                          <div className="receipt-grid-filter-values">
+                            {visibleValues.map((value) => (
+                              <label className="receipt-grid-filter-check" key={value}>
+                                <input
+                                  checked={selectedValues.includes(value)}
+                                  onChange={() => toggleReceiptColumnValue(filterColumn, value)}
+                                  type="checkbox"
+                                />
+                                <span title={value}>{value}</span>
+                              </label>
+                            ))}
+                            {visibleValues.length === 0 && <span className="receipt-grid-filter-empty">没有匹配项</span>}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                    {index < receiptGridColumns.length - 1 && (
+                      <button
+                        aria-label={`调整${column.label}列宽`}
+                        className="recon-column-resizer"
+                        onPointerDown={(event) => beginReceiptColumnResize(index, event)}
+                        title="拖动调整列宽"
+                        type="button"
+                      />
+                    )}
+                  </th>
+                );
+              })}
+            </tr>
+            <tr className="receipt-grid-filter-row">
+              {receiptGridColumns.map((column) => {
+                const filterColumn = column.id === "actions" ? undefined : column.id;
+                return (
+                  <th key={column.id}>
+                    {filterColumn && (
+                      <input
+                        aria-label={`快速筛选${column.label}`}
+                        onChange={(event) => setReceiptColumnQuery(filterColumn, event.target.value)}
+                        placeholder="筛选"
+                        value={columnQueries[filterColumn]}
+                      />
+                    )}
+                  </th>
+                );
+              })}
+            </tr>
+          </thead>
+          <tbody>
+            {visibleReceiptRows.map(({ receipt, allocated, unallocated }) => (
               <tr key={receipt.id}>
                 <td>{getReceiptCustomerName(receipt.customerId)}</td>
                 <td>{receipt.receiptDate}</td>
                 <td>¥ {formatMoney(receipt.amount)}</td>
                 <td>¥ {formatMoney(allocated)}</td>
-                <td className={receipt.amount - allocated > 0 ? "is-danger" : "is-ok"}>¥ {formatMoney(receipt.amount - allocated)}</td>
+                <td className={unallocated > 0 ? "is-danger" : "is-ok"}>¥ {formatMoney(unallocated)}</td>
                 <td>{receipt.method}</td>
                 <td>{receipt.transactionNo || "-"}</td>
                 <td>{receipt.note || "-"}</td>
@@ -3027,19 +3598,18 @@ function ReceiptPoolModule(props: {
                   </div>
                 </td>
               </tr>
-            );
-          })}
-        </tbody>
-        <tfoot>
-          <tr>
-            <td colSpan={2}>当前合计</td>
-            <td>¥ {formatMoney(totalAmount)}</td>
-            <td>¥ {formatMoney(totalAllocated)}</td>
-            <td className={totalUnallocated > 0 ? "is-danger" : "is-ok"}>¥ {formatMoney(totalUnallocated)}</td>
-            <td colSpan={4}></td>
-          </tr>
-        </tfoot>
-      </table>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <footer className="receipt-grid-summary" aria-label="当前收款合计">
+        <strong>当前合计</strong>
+        <div>
+          <span>收款金额 <b>¥ {formatMoney(totalAmount)}</b></span>
+          <span>已分配 <b>¥ {formatMoney(totalAllocated)}</b></span>
+          <span className={totalUnallocated > 0 ? "is-danger" : "is-ok"}>未分配 <b>¥ {formatMoney(totalUnallocated)}</b></span>
+        </div>
+      </footer>
       {editingReceipt && (
         <ReceiptRecordEditModal
           allocatedAmount={getReceiptAllocatedAmount(editingReceipt.id, props.allocations)}
@@ -3246,6 +3816,15 @@ function InvoiceRecordsModule(props: {
   const [periodMonth, setPeriodMonth] = useState("");
   const [styleKeyword, setStyleKeyword] = useState("");
   const [invoiceKeyword, setInvoiceKeyword] = useState("");
+  const [columnQueries, setColumnQueries] = useState<Record<InvoiceGridColumnId, string>>(() => createSpreadsheetColumnQueries(invoiceGridColumns));
+  const [columnSelections, setColumnSelections] = useState<Partial<Record<InvoiceGridColumnId, string[]>>>({});
+  const [activeFilterColumn, setActiveFilterColumn] = useState<InvoiceGridColumnId | null>(null);
+  const [filterValueSearch, setFilterValueSearch] = useState("");
+  const [invoiceColumnWidths, setInvoiceColumnWidths] = useState<number[] | null>(() =>
+    loadSpreadsheetGridColumnWidths(INVOICE_GRID_COLUMN_WIDTHS_STORAGE_KEY, invoiceGridColumns.length),
+  );
+  const invoiceTableRef = useRef<HTMLTableElement | null>(null);
+  const invoiceFilterPopoverRef = useRef<HTMLDivElement | null>(null);
   const rows = props.invoices.map((invoice) => {
     const allocations = props.invoiceAllocations.filter((allocation) => allocation.invoiceId === invoice.id);
     const styleNos = allocations
@@ -3263,9 +3842,73 @@ function InvoiceRecordsModule(props: {
       `${invoice.invoiceNo} ${invoice.note ?? ""}`.toLowerCase().includes(invoiceKeyword.trim().toLowerCase());
     return matchesCustomer && matchesPeriod && matchesStyle && matchesInvoice;
   });
-  const totalAmount = filteredRows.reduce((sum, row) => sum + row.invoice.amount, 0);
-  const invoiceHeaderTitle = customerId ? props.customers.find((customer) => customer.id === customerId)?.name ?? "当前客户" : "全部客户";
+  const invoiceGridRows: Array<SpreadsheetGridRow<InvoiceGridColumnId> & { row: (typeof filteredRows)[number] }> = filteredRows.map((row) => ({
+    row,
+    values: {
+      customer: row.customer?.name ?? "-",
+      styleNos: row.styleNos.length > 0 ? row.styleNos.join("、") : "未分配",
+      invoiceDate: row.invoice.invoiceDate,
+      invoiceNo: row.invoice.invoiceNo || "-",
+      amount: formatMoney(row.invoice.amount),
+      note: row.invoice.note || "-",
+    },
+  }));
+  const invoiceColumnValues = getSpreadsheetColumnValues(invoiceGridColumns, invoiceGridRows);
+  const visibleInvoiceRows = invoiceGridRows.filter((gridRow) =>
+    invoiceGridColumns.every((column) => {
+      const query = columnQueries[column.id].trim().toLowerCase();
+      const selection = columnSelections[column.id];
+      const value = gridRow.values[column.id];
+      return (!query || value.toLowerCase().includes(query)) && (!selection || selection.includes(value));
+    }),
+  );
+  const totalAmount = visibleInvoiceRows.reduce((sum, gridRow) => sum + gridRow.row.invoice.amount, 0);
+  const invoiceTableWidth = invoiceColumnWidths?.reduce((sum, width) => sum + width, 0) ?? 1095;
 
+  useEffect(() => {
+    if (!activeFilterColumn) return;
+    const closeFilterPopover = (event: MouseEvent) => {
+      if (!invoiceFilterPopoverRef.current?.contains(event.target as Node)) setActiveFilterColumn(null);
+    };
+    document.addEventListener("mousedown", closeFilterPopover);
+    return () => document.removeEventListener("mousedown", closeFilterPopover);
+  }, [activeFilterColumn]);
+
+  useEffect(() => {
+    if (!invoiceColumnWidths) return;
+    try {
+      window.localStorage.setItem(INVOICE_GRID_COLUMN_WIDTHS_STORAGE_KEY, JSON.stringify(invoiceColumnWidths));
+    } catch {
+      // 列宽记录失败不影响开票记录使用。
+    }
+  }, [invoiceColumnWidths]);
+
+  function setInvoiceColumnQuery(columnId: InvoiceGridColumnId, value: string) {
+    setColumnQueries((current) => ({ ...current, [columnId]: value }));
+  }
+
+  function setInvoiceColumnSelection(columnId: InvoiceGridColumnId, values: string[]) {
+    setColumnSelections((current) => ({ ...current, [columnId]: values }));
+  }
+
+  function toggleInvoiceColumnValue(columnId: InvoiceGridColumnId, value: string) {
+    const allValues = invoiceColumnValues[columnId];
+    setColumnSelections((current) => {
+      const selectedValues = new Set(current[columnId] ?? allValues);
+      if (selectedValues.has(value)) selectedValues.delete(value);
+      else selectedValues.add(value);
+      return { ...current, [columnId]: Array.from(selectedValues) };
+    });
+  }
+
+  function clearInvoiceColumnFilter(columnId: InvoiceGridColumnId) {
+    setInvoiceColumnQuery(columnId, "");
+    setColumnSelections((current) => {
+      const { [columnId]: _discarded, ...remaining } = current;
+      return remaining;
+    });
+    setFilterValueSearch("");
+  }
   async function importInvoiceFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     event.target.value = "";
@@ -3281,9 +3924,51 @@ function InvoiceRecordsModule(props: {
 
   return (
     <section className="recon-simple-panel records-fill-page invoice-records-page">
-      <div className="recon-panel-head">
-        <div>
-          <strong>{invoiceHeaderTitle}</strong>
+      <div className="recon-panel-head invoice-records-head">
+        <div className="module-filter-grid invoice-records-filter-grid">
+          <label>
+            客户
+            <SearchableSelect
+              ariaLabel="客户"
+              emptyText="无匹配客户"
+              onChange={setCustomerId}
+              options={[{ label: "全部客户", value: "" }, ...props.customers.map((customer) => ({ label: customer.name, value: customer.id }))]}
+              placeholder="全部客户"
+              value={customerId}
+            />
+          </label>
+          <label>
+            开票月份
+            <AnimatedSelect
+              ariaLabel="开票月份"
+              onChange={setPeriodMonth}
+              options={[{ label: "全部月份", value: "" }, ...toSelectOptions(periodOptions)]}
+              value={periodMonth}
+            />
+          </label>
+          <label>
+            款号
+            <input onChange={(event) => setStyleKeyword(event.target.value)} placeholder="输入款号" value={styleKeyword} />
+          </label>
+          <label>
+            发票号 / 备注
+            <input onChange={(event) => setInvoiceKeyword(event.target.value)} placeholder="输入关键词" value={invoiceKeyword} />
+          </label>
+          <button
+            className="recon-button recon-button-light"
+            onClick={() => {
+              setCustomerId("");
+              setPeriodMonth("");
+              setStyleKeyword("");
+              setInvoiceKeyword("");
+              setColumnQueries(createSpreadsheetColumnQueries(invoiceGridColumns));
+              setColumnSelections({});
+              setActiveFilterColumn(null);
+            }}
+            type="button"
+          >
+            重置
+          </button>
         </div>
         <label className="recon-button recon-button-primary payment-import-trigger">
           <Upload size={16} />
@@ -3291,87 +3976,65 @@ function InvoiceRecordsModule(props: {
           <input accept=".xlsx,.csv" onChange={importInvoiceFile} type="file" />
         </label>
       </div>
-      <div className="module-filter-grid">
-        <label>
-          客户
-          <SearchableSelect
-            ariaLabel="客户"
-            emptyText="无匹配客户"
-            onChange={setCustomerId}
-            options={[{ label: "全部客户", value: "" }, ...props.customers.map((customer) => ({ label: customer.name, value: customer.id }))]}
-            placeholder="全部客户"
-            value={customerId}
-          />
-        </label>
-        <label>
-          开票月份
-          <AnimatedSelect
-            ariaLabel="开票月份"
-            onChange={setPeriodMonth}
-            options={[{ label: "全部月份", value: "" }, ...toSelectOptions(periodOptions)]}
-            value={periodMonth}
-          />
-        </label>
-        <label>
-          款号
-          <input onChange={(event) => setStyleKeyword(event.target.value)} placeholder="输入款号" value={styleKeyword} />
-        </label>
-        <label>
-          发票号 / 备注
-          <input onChange={(event) => setInvoiceKeyword(event.target.value)} placeholder="输入关键词" value={invoiceKeyword} />
-        </label>
-        <button
-          className="recon-button recon-button-light"
-          onClick={() => {
-            setCustomerId("");
-            setPeriodMonth("");
-            setStyleKeyword("");
-            setInvoiceKeyword("");
-          }}
-          type="button"
+      <div className="receipt-grid-scroll invoice-grid-scroll">
+        <table
+          className="recon-table recon-table-stable receipt-grid-table invoice-grid-table"
+          ref={invoiceTableRef}
+          style={{ minWidth: "100%", width: invoiceColumnWidths ? `${invoiceTableWidth}px` : "100%" }}
         >
-          重置
-        </button>
+          <colgroup>
+            {invoiceGridColumns.map((column, index) => (
+              <col key={column.id} style={{ width: invoiceColumnWidths ? `${invoiceColumnWidths[index]}px` : column.width }} />
+            ))}
+          </colgroup>
+          <SpreadsheetGridHeader
+            activeFilterColumn={activeFilterColumn}
+            columnQueries={columnQueries}
+            columnSelections={columnSelections}
+            columnValues={invoiceColumnValues}
+            columns={invoiceGridColumns}
+            filterPopoverRef={invoiceFilterPopoverRef}
+            filterValueSearch={filterValueSearch}
+            onBeginResize={(columnIndex, event) =>
+              beginSpreadsheetColumnResize(
+                invoiceTableRef.current,
+                invoiceColumnWidths,
+                invoiceGridColumns.map((column) => column.minWidth),
+                columnIndex,
+                event,
+                setInvoiceColumnWidths,
+              )
+            }
+            onClearColumnFilter={clearInvoiceColumnFilter}
+            onColumnQueryChange={setInvoiceColumnQuery}
+            onColumnSelectionChange={setInvoiceColumnSelection}
+            onFilterValueSearchChange={setFilterValueSearch}
+            onToggleColumnFilter={(columnId) => {
+              setActiveFilterColumn((current) => (current === columnId ? null : columnId));
+              setFilterValueSearch("");
+            }}
+            onToggleColumnValue={toggleInvoiceColumnValue}
+          />
+          <tbody>
+            {visibleInvoiceRows.map(({ row: { customer, invoice, styleNos } }) => (
+              <tr key={invoice.id}>
+                <td>{customer?.name ?? "-"}</td>
+                <td>{styleNos.length > 0 ? styleNos.join("、") : "未分配"}</td>
+                <td>{invoice.invoiceDate}</td>
+                <td>{invoice.invoiceNo || "-"}</td>
+                <td>¥ {formatMoney(invoice.amount)}</td>
+                <td>{invoice.note || "-"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
-      <table className="recon-table recon-table-stable">
-        <colgroup>
-          <col style={{ width: "17%" }} />
-          <col style={{ width: "19%" }} />
-          <col style={{ width: "15%" }} />
-          <col style={{ width: "19%" }} />
-          <col style={{ width: "16%" }} />
-          <col style={{ width: "14%" }} />
-        </colgroup>
-        <thead>
-          <tr>
-            <th>客户</th>
-            <th>款号</th>
-            <th>开票日期</th>
-            <th>发票号码</th>
-            <th>开票金额</th>
-            <th>备注</th>
-          </tr>
-        </thead>
-        <tbody>
-          {filteredRows.map(({ customer, invoice, styleNos }) => (
-            <tr key={invoice.id}>
-              <td>{customer?.name ?? "-"}</td>
-              <td>{styleNos.length > 0 ? styleNos.join("、") : "未分配"}</td>
-              <td>{invoice.invoiceDate}</td>
-              <td>{invoice.invoiceNo || "-"}</td>
-              <td>¥ {formatMoney(invoice.amount)}</td>
-              <td>{invoice.note || "-"}</td>
-            </tr>
-          ))}
-        </tbody>
-        <tfoot>
-          <tr>
-            <td colSpan={4}>当前合计</td>
-            <td>¥ {formatMoney(totalAmount)}</td>
-            <td></td>
-          </tr>
-        </tfoot>
-      </table>
+      <footer className="receipt-grid-summary invoice-grid-summary" aria-label="当前开票合计">
+        <strong>当前合计</strong>
+        <div>
+          <span>开票金额 <b>¥ {formatMoney(totalAmount)}</b></span>
+        </div>
+      </footer>
     </section>
   );
 }

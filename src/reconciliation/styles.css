@@ -209,9 +209,9 @@
   gap: 18px;
   margin-bottom: 18px;
   padding: 16px 18px;
-  border: 1px solid #a9c3d8;
+  border: 1px solid #93b8d1;
   border-radius: 8px;
-  background: linear-gradient(180deg, #c5dbea 0%, #d7e8f2 100%);
+  background: linear-gradient(180deg, #a9cadf 0%, #c0dbea 100%);
   box-shadow: 0 12px 26px rgba(30, 91, 120, 0.14);
 }
 
@@ -1100,6 +1100,7 @@
   max-width: 100%;
   min-width: 0;
   overflow: auto;
+  overflow-anchor: none;
 }
 
 .recon-style-table-wrap {
@@ -1181,9 +1182,13 @@
   width: 1px;
   background: #bdcad8;
   content: "";
+  opacity: 0;
+  transition: opacity 140ms ease, width 140ms ease, background 140ms ease;
 }
 
-.recon-column-resizer:hover::after {
+.recon-column-resizer:hover::after,
+.recon-column-resizer:focus-visible::after {
+  opacity: 1;
   width: 2px;
   background: #1e5b78;
 }
@@ -1196,12 +1201,11 @@ body.is-column-resizing * {
 
 .recon-style-table th:first-child,
 .recon-style-table td:first-child {
-  width: 12%;
+  text-align: left;
 }
 
 .recon-style-table th:nth-child(2),
 .recon-style-table td:nth-child(2) {
-  width: 11%;
   white-space: nowrap;
   text-align: left;
 }
@@ -1214,15 +1218,12 @@ body.is-column-resizing * {
 .recon-style-table td:nth-child(5),
 .recon-style-table th:nth-child(6),
 .recon-style-table td:nth-child(6) {
-  width: 11%;
   white-space: nowrap;
   text-align: left;
 }
 
 .recon-style-table th:nth-child(7),
 .recon-style-table td:nth-child(7) {
-  width: 16%;
-  min-width: 154px;
   text-align: left;
 }
 
@@ -1233,9 +1234,6 @@ body.is-column-resizing * {
 
 .recon-style-table th:last-child,
 .recon-style-table td:last-child {
-  width: 10%;
-  min-width: 88px;
-  max-width: 118px;
   text-align: left;
 }
 
@@ -1780,7 +1778,8 @@ body.is-column-resizing * {
 }
 
 .overview-records-page {
-  min-height: calc(100vh - 239px);
+  height: calc(100dvh - 239px);
+  min-height: 0;
 }
 
 .records-fill-page .module-filter-grid {
@@ -1817,6 +1816,405 @@ body.is-column-resizing * {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.receipt-grid-scroll {
+  position: relative;
+  z-index: 1;
+  width: 100%;
+  overflow: auto;
+}
+
+.records-fill-page.receipt-records-page {
+  height: calc(100dvh - 119px);
+  min-height: 0;
+}
+
+.receipt-records-page .receipt-records-head {
+  align-items: center;
+  min-height: 88px;
+  padding: 14px 18px;
+  border-bottom-color: #c9dce9;
+  background: #dfedf6;
+}
+
+.receipt-records-page .receipt-records-filter-grid {
+  grid-template-columns: repeat(3, minmax(150px, 220px)) auto;
+  flex: 1 1 680px;
+  margin: 0;
+}
+
+.receipt-records-page .receipt-records-filter-grid .animated-select-trigger,
+.receipt-records-page .receipt-records-filter-grid > label > input,
+.receipt-records-page .receipt-records-filter-grid > .recon-button {
+  min-height: 42px;
+}
+
+.receipt-records-page .payment-import-trigger {
+  flex: 0 0 auto;
+  margin-bottom: 0;
+}
+
+.invoice-records-page .invoice-records-head,
+.overview-records-page .overview-records-head {
+  align-items: center;
+  min-height: 88px;
+  padding: 14px 18px;
+  border-bottom-color: #c9dce9;
+  background: #dfedf6;
+}
+
+.invoice-records-page .invoice-records-filter-grid {
+  grid-template-columns: repeat(4, minmax(150px, 210px)) auto;
+  flex: 1 1 850px;
+  margin: 0;
+}
+
+.overview-records-page .overview-records-filter-grid {
+  grid-template-columns: minmax(150px, 180px) auto minmax(150px, 180px) auto;
+  flex: 1 1 700px;
+  margin: 0;
+}
+
+.invoice-records-page .invoice-records-filter-grid .animated-select-trigger,
+.invoice-records-page .invoice-records-filter-grid > label > input,
+.invoice-records-page .invoice-records-filter-grid > .recon-button,
+.overview-records-page .overview-records-filter-grid .animated-select-trigger,
+.overview-records-page .overview-records-filter-grid > .recon-button {
+  min-height: 42px;
+}
+
+.invoice-records-page .payment-import-trigger {
+  flex: 0 0 auto;
+  margin-bottom: 0;
+}
+
+.invoice-records-page .recon-table thead th,
+.overview-records-page .recon-table thead th {
+  border-bottom-color: #c9d8e5;
+  background: #edf3f8;
+}
+
+.invoice-records-page .recon-table tbody tr,
+.overview-records-page .recon-table tbody tr {
+  transition: background 140ms ease;
+}
+
+.invoice-records-page .recon-table tbody tr td,
+.overview-records-page .recon-table tbody tr td {
+  transition: background 140ms ease;
+}
+
+.invoice-records-page .recon-table tbody tr:hover td,
+.overview-records-page .recon-table tbody tr:hover td {
+  background: #e6f4fa;
+}
+
+.receipt-records-page .receipt-grid-scroll {
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.invoice-records-page,
+.overview-records-page {
+  min-height: 0;
+}
+
+.invoice-records-page {
+  height: calc(100dvh - 119px);
+}
+
+.invoice-records-page .receipt-grid-scroll,
+.overview-records-page .receipt-grid-scroll {
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.receipt-grid-table {
+  min-width: 940px;
+}
+
+.receipt-grid-table th,
+.receipt-grid-table td {
+  border-right: 1px solid #dce4ed;
+}
+
+.receipt-grid-table th:last-child,
+.receipt-grid-table td:last-child {
+  border-right: 0;
+}
+
+.receipt-grid-table .receipt-grid-header-row th {
+  position: relative;
+  overflow: visible;
+  padding: 10px 12px;
+  border-bottom-color: #c9d8e5;
+  background: #edf3f8;
+  text-align: center;
+}
+
+.receipt-grid-table .receipt-grid-header-row th > .recon-column-resizer {
+  z-index: 3;
+  right: -7px;
+  width: 14px;
+}
+
+.receipt-grid-table .receipt-grid-header-row th:hover > .recon-column-resizer::after,
+.receipt-grid-table .receipt-grid-header-row th:focus-within > .recon-column-resizer::after {
+  opacity: 1;
+  width: 2px;
+  background: #1e5b78;
+}
+
+.receipt-grid-header-content {
+  position: relative;
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  padding: 0 20px 0 8px;
+}
+
+.receipt-grid-header-content > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.receipt-grid-filter-button {
+  position: absolute;
+  right: 8px;
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #7a899d;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 140ms ease, background 140ms ease, color 140ms ease;
+}
+
+.receipt-grid-table th:hover .receipt-grid-filter-button,
+.receipt-grid-filter-button.is-active,
+.receipt-grid-filter-button:focus-visible {
+  opacity: 1;
+}
+
+.receipt-grid-filter-button:hover,
+.receipt-grid-filter-button.is-active {
+  background: #e4f3fb;
+  color: #1e5b78;
+}
+
+.receipt-grid-filter-row th {
+  padding: 5px 7px 8px !important;
+  border-bottom: 1px solid #cfd8e5;
+  background: #e5edf4;
+}
+
+.receipt-grid-table tbody tr {
+  transition: background 140ms ease;
+}
+
+.receipt-grid-table tbody tr td {
+  transition: background 140ms ease;
+}
+
+.receipt-grid-table tbody tr:hover td {
+  background: #e6f4fa;
+}
+
+.receipt-grid-filter-row input {
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  border: 1px solid #c9d4e0;
+  border-radius: 4px;
+  padding: 4px 7px;
+  background: #ffffff;
+  color: #26364d;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 700;
+  outline: none;
+}
+
+.receipt-grid-filter-row input:focus {
+  border-color: #4d8db5;
+  box-shadow: 0 0 0 2px rgba(77, 141, 181, 0.12);
+}
+
+.receipt-grid-filter-popover {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 8px);
+  right: -2px;
+  display: grid;
+  grid-template-rows: auto 32px auto minmax(0, 1fr);
+  width: min(270px, calc(100vw - 48px));
+  height: 300px;
+  gap: 8px;
+  overflow: hidden;
+  padding: 10px;
+  border: 1px solid #cbd7e4;
+  border-radius: 7px;
+  background: #ffffff;
+  box-shadow: 0 14px 34px rgba(24, 37, 56, 0.18);
+  color: #26364d;
+  text-align: left;
+}
+
+.receipt-grid-filter-popover__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.receipt-grid-filter-popover__head strong {
+  color: #172033;
+  font-size: 13px;
+}
+
+.receipt-grid-filter-popover__head button {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #1e5b78;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.receipt-grid-filter-popover > input {
+  width: 100%;
+  min-height: 32px;
+  border: 1px solid #c9d4e0;
+  border-radius: 5px;
+  padding: 6px 8px;
+  color: #26364d;
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+}
+
+.receipt-grid-filter-popover > input:focus {
+  border-color: #4d8db5;
+  box-shadow: 0 0 0 2px rgba(77, 141, 181, 0.12);
+}
+
+.receipt-grid-filter-values {
+  display: grid;
+  min-height: 0;
+  align-content: start;
+  grid-auto-rows: min-content;
+  gap: 2px;
+  overflow: auto;
+  padding-top: 2px;
+}
+
+.receipt-grid-filter-check {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 2px;
+  color: #26364d;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.receipt-grid-filter-check input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: #1e7fa9;
+}
+
+.receipt-grid-filter-check span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.receipt-grid-filter-check-all {
+  padding-bottom: 7px;
+  border-bottom: 1px solid #e5ebf2;
+}
+
+.receipt-grid-filter-empty {
+  padding: 12px 2px;
+  color: #7a899d;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.records-fill-page.receipt-records-page::after {
+  display: none;
+  min-height: 0;
+}
+
+.records-fill-page.invoice-records-page::after,
+.records-fill-page.overview-records-page::after {
+  display: none;
+  min-height: 0;
+}
+
+.receipt-grid-summary {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 12px 16px 16px;
+  padding: 13px 16px;
+  border: 1px solid #d8e2ed;
+  border-radius: 7px;
+  background: #f4f8fc;
+}
+
+.receipt-grid-summary > strong {
+  color: #172033;
+  font-size: 15px;
+  font-weight: 900;
+}
+
+.receipt-grid-summary > div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 18px;
+}
+
+.receipt-grid-summary span {
+  color: #637287;
+  font-size: 13px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.receipt-grid-summary b {
+  margin-left: 5px;
+  color: #172033;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.receipt-grid-summary .is-danger,
+.receipt-grid-summary .is-danger b {
+  color: #c5221f;
+}
+
+.receipt-grid-summary .is-ok,
+.receipt-grid-summary .is-ok b {
+  color: #087f4c;
 }
 
 .records-fill-page::after {
