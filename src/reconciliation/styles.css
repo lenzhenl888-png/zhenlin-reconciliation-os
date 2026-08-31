@@ -1855,6 +1855,162 @@ body.is-column-resizing * {
   margin-bottom: 0;
 }
 
+.records-fill-page.financial-records-page {
+  height: calc(100dvh - 119px);
+  min-height: 0;
+}
+
+.financial-records-page .financial-records-head {
+  align-items: center;
+  min-height: 98px;
+  padding: 14px 18px;
+  border-bottom-color: #bdd2e2;
+  background: #d7e8f3;
+}
+
+.financial-records-page .financial-records-filter-grid {
+  grid-template-columns: minmax(170px, 220px) minmax(300px, 360px) minmax(180px, 240px) auto;
+  flex: 1 1 900px;
+  margin: 0;
+}
+
+.financial-records-page .financial-records-filter-grid .animated-select-trigger,
+.financial-records-page .financial-records-filter-grid > label > input,
+.financial-records-page .financial-records-filter-grid > .recon-button {
+  min-height: 42px;
+}
+
+.financial-date-range {
+  display: grid !important;
+  min-width: 0;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 7px;
+}
+
+.financial-date-range input {
+  width: 100%;
+  min-width: 0;
+  height: 42px;
+}
+
+.financial-date-range b {
+  color: #64768d;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.financial-import-actions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+}
+
+.financial-import-actions .payment-import-trigger {
+  flex: 0 0 auto;
+  margin-bottom: 0;
+}
+
+.financial-records-page .receipt-grid-scroll {
+  min-height: 0;
+  flex: 1 1 auto;
+}
+
+.records-fill-page.financial-records-page::after {
+  display: none;
+  min-height: 0;
+}
+
+.financial-grid-table {
+  min-width: 0;
+}
+
+.financial-row-actions {
+  justify-content: center;
+}
+
+.financial-amount {
+  font-weight: 800;
+}
+
+.financial-amount.is-receipt {
+  color: #087f4c;
+}
+
+.financial-amount.is-invoice {
+  color: #1d5275;
+}
+
+.financial-grid-summary-bar {
+  flex: 0 0 auto;
+  overflow: hidden;
+  border-top: 1px solid #bdcede;
+  background: #f2f7fb;
+}
+
+.financial-grid-summary-row {
+  display: grid;
+  min-width: 0;
+  transition: transform 80ms linear;
+}
+
+.financial-grid-summary-row > div {
+  min-width: 0;
+  padding: 13px 12px;
+  border-right: 1px solid #dce4ed;
+  background: #f2f7fb;
+  vertical-align: middle;
+}
+
+.financial-grid-total-label {
+  grid-column: span 4;
+  color: #172033;
+  font-size: 15px;
+  font-weight: 900;
+  text-align: left;
+}
+
+.financial-grid-total-amount {
+  text-align: center;
+  white-space: nowrap;
+}
+
+.financial-grid-total-amount span {
+  display: block;
+  color: #637287;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.financial-grid-total-amount b {
+  display: block;
+  margin-top: 3px;
+  color: #172033;
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.financial-grid-total-amount.is-receipt b {
+  color: #087f4c;
+}
+
+.financial-grid-total-amount.is-invoice b {
+  color: #1d5275;
+}
+
+.financial-grid-total-difference {
+  grid-column: span 2;
+}
+
+.financial-grid-total-difference.is-positive b {
+  color: #c5221f;
+}
+
+.financial-grid-total-difference.is-negative b {
+  color: #087f4c;
+}
+
 .invoice-records-page .invoice-records-head,
 .overview-records-page .overview-records-head {
   align-items: center;
