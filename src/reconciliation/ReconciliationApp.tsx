@@ -324,7 +324,9 @@ function buildAuditLogEntries(
   operator: { userId: string; username: string; displayName: string },
 ): AuditLog[] {
   const entries: AuditLog[] = [];
-  const occurredAt = new Date().toISOString();
+  const now = new Date();
+  const localNow = new Date(now.getTime() - now.getTimezoneOffset() * 60_000);
+  const occurredAt = localNow.toISOString().slice(0, 19);
   const userAgent = typeof navigator !== "undefined" ? navigator.userAgent : "";
 
   function makeEntry(
