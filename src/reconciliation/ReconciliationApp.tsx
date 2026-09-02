@@ -50,6 +50,7 @@ import type {
   MonthlyStatement,
   PaymentMethod,
   ReceiptAllocation,
+  ReconciliationStore,
   StatementAdjustment,
   StatementConfirmationHistory,
   StatementHistoryAction,
@@ -63,6 +64,8 @@ import {
   adjustmentDirectionOptions,
   agingBucketLabels,
   agingBuckets,
+  auditActionLabels,
+  auditModuleLabels,
   confirmationMethodOptions,
   customerProfileStatusOptions,
   customerTypeOptions,
@@ -146,6 +149,269 @@ const emptyFilters: Filters = {
 
 function toSelectOptions<TValue extends string>(options: readonly TValue[]) {
   return options.map((option) => ({ label: option, value: option }));
+}
+
+// ---------- V1.1 审计日志：基于 store 前后差异自动生成操作记录 ----------
+
+type AuditEntityRuntime = Record<string, unknown> & { id: string };
+
+type AuditCollectionConfig = {
+  collection: keyof ReconciliationStore;
+  module: string;
+  entityType: string;
+  keyFields: string[];
+};
+
+const auditFieldLabels: Record<string, string> = {
+  name: "名称",
+  shortName: "客户简称",
+  contact: "联系方式",
+  contactName: "联系人",
+  remark: "备注",
+  status: "状态",
+  lifecycle: "对账状态",
+  openingBalance: "期初余额",
+  dueDate: "到期日",
+  note: "备注",
+  styleNo: "款号",
+  receivableAmount: "应收金额",
+  adjustmentType: "调整类型",
+  direction: "调整方向",
+  amount: "金额",
+  reason: "原因",
+  receiptDate: "收款日期",
+  method: "收款方式",
+  transactionNo: "流水号",
+  invoiceDate: "开票日期",
+  invoiceNo: "发票号码",
+  allocatedAmount: "核销金额",
+  statementId: "所属月度对账单",
+  styleAccountId: "关联款号",
+  isLocked: "锁定状态",
+  settlementType: "结算方式",
+  paymentTermDays: "账期天数",
+  creditLimit: "信用额度",
+  needInvoiceBeforePayment: "付款前必须开票",
+  startupOpeningBalance: "期初启动余额",
+  customerId: "所属客户",
+};
+
+const auditMoneyFields = new Set(["amount", "receivableAmount", "openingBalance", "allocatedAmount", "creditLimit", "startupOpeningBalance"]);
+
+function auditFormatValue(collection: keyof ReconciliationStore, field: string, value: unknown, store: ReconciliationStore) {
+  if (value === undefined || value === null || value === "") return "（空）";
+  if (field === "statementId") {
+    const statement = store.monthlyStatements.find((item) => item.id === value);
+    return statement ? `${statement.periodMonth} 月度单` : String(value);
+  }
+  if (field === "styleAccountId") {
+    const style = store.styleAccounts.find((item) => item.id === value);
+    return style?.styleNo ?? "整月调整";
+  }
+  if (field === "lifecycle") return statementLifecycleLabels[value as StatementLifecycle] ?? String(value);
+  if (field === "direction") return value === "decrease" ? "调减" : "调增";
+  if (auditMoneyFields.has(field)) return `¥ ${formatMoney(Number(value))}`;
+  return String(value);
+}
+
+function auditDescribeEntity(collection: keyof ReconciliationStore, entity: AuditEntityRuntime, store: ReconciliationStore) {
+  const customerName = (customerId: unknown) => getCustomerDisplayName(String(customerId ?? ""), store);
+  switch (collection) {
+    case "customers":
+      return `客户「${String(entity.name ?? "")}」`;
+    case "customerProfiles":
+      return `客户资料「${String(entity.shortName ?? entity.fullName ?? "")}」`;
+    case "styleAccounts":
+      return `款号「${String(entity.styleNo ?? "")}」`;
+    case "monthlyStatements":
+      return `${customerName(entity.customerId)} ${String(entity.periodMonth ?? "")} 月度对账单`;
+    case "statementItems": {
+      const statement = store.monthlyStatements.find((item) => item.id === entity.statementId);
+      const style = store.styleAccounts.find((item) => item.id === entity.styleAccountId);
+      return `${customerName(entity.customerId)} ${statement?.periodMonth ?? ""} 款号「${style?.styleNo ?? "-"}」应收`;
+    }
+    case "statementAdjustments":
+      return `${customerName(entity.customerId)} ${String(entity.periodMonth ?? "")} 扣款调整`;
+    case "customerReceipts":
+      return `${customerName(entity.customerId)} ${String(entity.receiptDate ?? "")} 收款 ¥ ${formatMoney(Number(entity.amount ?? 0))}`;
+    case "customerInvoices":
+      return `${customerName(entity.customerId)} ${String(entity.invoiceDate ?? "")} 开票`;
+    case "receiptAllocations":
+      return `收款核销记录（¥ ${formatMoney(Number(entity.allocatedAmount ?? 0))}）`;
+    case "invoiceAllocations":
+      return `开票分配记录（¥ ${formatMoney(Number(entity.allocatedAmount ?? 0))}）`;
+    default:
+      return String(entity.id ?? "");
+  }
+}
+
+const auditCollectionConfigs: Array<AuditCollectionConfig> = [
+  {
+    collection: "customers",
+    module: "customer",
+    entityType: "customer",
+    keyFields: ["name", "contact", "remark"],
+  },
+  {
+    collection: "customerProfiles",
+    module: "customer",
+    entityType: "customerProfile",
+    keyFields: ["shortName", "status", "contactName", "mobile", "settlementType", "paymentTermDays", "creditLimit", "needInvoiceBeforePayment", "startupOpeningBalance"],
+  },
+  {
+    collection: "styleAccounts",
+    module: "receivable",
+    entityType: "styleAccount",
+    keyFields: ["styleNo", "customerId"],
+  },
+  {
+    collection: "monthlyStatements",
+    module: "statement",
+    entityType: "statement",
+    keyFields: ["lifecycle", "status", "openingBalance", "dueDate", "note"],
+  },
+  {
+    collection: "statementItems",
+    module: "receivable",
+    entityType: "statementItem",
+    keyFields: ["receivableAmount", "note", "statementId", "styleAccountId"],
+  },
+  {
+    collection: "statementAdjustments",
+    module: "adjustment",
+    entityType: "statementAdjustment",
+    keyFields: ["adjustmentType", "direction", "amount", "reason", "note"],
+  },
+  {
+    collection: "customerReceipts",
+    module: "receipt",
+    entityType: "customerReceipt",
+    keyFields: ["amount", "receiptDate", "method", "transactionNo", "note", "isLocked"],
+  },
+  {
+    collection: "customerInvoices",
+    module: "invoice",
+    entityType: "customerInvoice",
+    keyFields: ["amount", "invoiceDate", "invoiceNo", "note", "isLocked"],
+  },
+  {
+    collection: "receiptAllocations",
+    module: "allocation",
+    entityType: "receiptAllocation",
+    keyFields: ["allocatedAmount", "statementId", "styleAccountId", "note"],
+  },
+  {
+    collection: "invoiceAllocations",
+    module: "allocation",
+    entityType: "invoiceAllocation",
+    keyFields: ["allocatedAmount", "statementId", "styleAccountId", "note"],
+  },
+];
+
+function auditPickFields(entity: AuditEntityRuntime, fields: string[]) {
+  const picked: Record<string, unknown> = {};
+  fields.forEach((field) => {
+    picked[field] = entity[field] ?? null;
+  });
+  return picked;
+}
+
+function buildAuditLogEntries(
+  currentStore: ReconciliationStore,
+  nextStore: ReconciliationStore,
+  operator: { userId: string; username: string; displayName: string },
+): AuditLog[] {
+  const entries: AuditLog[] = [];
+  const occurredAt = new Date().toISOString();
+  const userAgent = typeof navigator !== "undefined" ? navigator.userAgent : "";
+
+  function makeEntry(
+    action: string,
+    collection: keyof ReconciliationStore,
+    config: AuditCollectionConfig,
+    entity: AuditEntityRuntime,
+    beforeData: Record<string, unknown>,
+    afterData: Record<string, unknown>,
+    storeForDescription: ReconciliationStore,
+  ) {
+    entries.push({
+      id: createId("audit"),
+      userId: operator.userId,
+      username: operator.username,
+      displayName: operator.displayName,
+      module: config.module,
+      entityType: config.entityType,
+      entityId: String(entity.id ?? ""),
+      action,
+      beforeData,
+      afterData,
+      description: `${auditActionLabels[action] ?? action} · ${auditDescribeEntity(config.collection, entity, storeForDescription)}`,
+      ipAddress: "",
+      userAgent,
+      createdAt: occurredAt,
+    });
+  }
+
+  auditCollectionConfigs.forEach((config) => {
+    const beforeList = (currentStore[config.collection] ?? []) as unknown as AuditEntityRuntime[];
+    const afterList = (nextStore[config.collection] ?? []) as unknown as AuditEntityRuntime[];
+    const beforeById = new Map(beforeList.map((entity) => [entity.id, entity]));
+    const afterById = new Map(afterList.map((entity) => [entity.id, entity]));
+
+    afterList.forEach((entity) => {
+      const before = beforeById.get(entity.id);
+      if (!before) {
+        makeEntry("create", config.collection, config, entity, {}, auditPickFields(entity, config.keyFields), nextStore);
+        return;
+      }
+      const changedFields = config.keyFields.filter((field) => JSON.stringify(before[field] ?? null) !== JSON.stringify(entity[field] ?? null));
+      if (changedFields.length === 0) return;
+
+      let action = "update";
+      if (config.collection === "monthlyStatements") {
+        const transition = `${before.lifecycle ?? "draft"}|${entity.lifecycle ?? "draft"}`;
+        const transitionActions: Record<string, string> = {
+          "draft|sent": "send",
+          "sent|confirmed": "confirm",
+          "confirmed|draft": "unconfirm",
+          "confirmed|locked": "lock",
+        };
+        if (transitionActions[transition]) action = transitionActions[transition];
+      }
+
+      const beforeData = auditPickFields(before as AuditEntityRuntime, changedFields);
+      const afterData = auditPickFields(entity, changedFields);
+      const description = `${auditActionLabels[action] ?? action} · ${auditDescribeEntity(config.collection, entity, nextStore)}：${changedFields
+        .map((field) =>
+          `${auditFieldLabels[field] ?? field} ${auditFormatValue(config.collection, field, beforeData[field], nextStore)} → ${auditFormatValue(config.collection, field, afterData[field], nextStore)}`,
+        )
+        .join("，")}`;
+      entries.push({
+        id: createId("audit"),
+        userId: operator.userId,
+        username: operator.username,
+        displayName: operator.displayName,
+        module: config.module,
+        entityType: config.entityType,
+        entityId: String(entity.id ?? ""),
+        action,
+        beforeData,
+        afterData,
+        description,
+        ipAddress: "",
+        userAgent,
+        createdAt: occurredAt,
+      });
+    });
+
+    beforeList.forEach((entity) => {
+      if (!afterById.has(entity.id)) {
+        makeEntry("delete", config.collection, config, entity, auditPickFields(entity, config.keyFields), {}, currentStore);
+      }
+    });
+  });
+
+  return entries;
 }
 
 export function ReconciliationApp() {
@@ -294,7 +560,16 @@ export function ReconciliationApp() {
   const allSummary = summarizeAll(store.customers, store);
 
   function updateStore(updater: (currentStore: typeof store) => typeof store) {
-    setStore((currentStore) => updater(currentStore));
+    setStore((currentStore) => {
+      const nextStore = updater(currentStore);
+      const auditEntries = buildAuditLogEntries(currentStore, nextStore, {
+        displayName: currentUserLabel ?? "未知用户",
+        userId: auth.user?.id ?? "local-dev-user",
+        username: auth.user?.username ?? "local-dev",
+      });
+      if (auditEntries.length === 0) return nextStore;
+      return { ...nextStore, auditLogs: [...(nextStore.auditLogs ?? []), ...auditEntries] };
+    });
   }
 
   function upsertCustomer(values: Pick<Customer, "name" | "contact" | "remark">, customerId?: string) {
@@ -1568,7 +1843,7 @@ export function ReconciliationApp() {
             invoiceAllocations={store.invoiceAllocations ?? []}
           />
         )}
-        {activeModule === "settings" && <SettingsModule />}
+        {activeModule === "settings" && <SettingsModule auditLogs={store.auditLogs ?? []} />}
       </main>
 
       {modal?.type === "customer" && (
@@ -4277,7 +4552,7 @@ function FinancialInvoiceEditModal(props: {
   );
 }
 
-function SettingsModule() {
+function SettingsModule(props: { auditLogs: AuditLog[] }) {
   const auth = useAuth();
   const [oldPassword, setOldPassword] = useState("");
   const [newPassword, setNewPassword] = useState("");
@@ -4285,6 +4560,13 @@ function SettingsModule() {
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const [logDateFrom, setLogDateFrom] = useState("");
+  const [logDateTo, setLogDateTo] = useState("");
+  const [logModule, setLogModule] = useState("");
+  const [logAction, setLogAction] = useState("");
+  const [logKeyword, setLogKeyword] = useState("");
+  const [logOperator, setLogOperator] = useState("");
+  const [viewingLog, setViewingLog] = useState<AuditLog | null>(null);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -4320,34 +4602,215 @@ function SettingsModule() {
     }
   }
 
+  const filteredAuditLogs = useMemo(() => {
+    const keyword = logKeyword.trim().toLowerCase();
+    return props.auditLogs
+      .filter((log) => {
+        const logDate = log.createdAt.slice(0, 10);
+        const matchesDate = (!logDateFrom || logDate >= logDateFrom) && (!logDateTo || logDate <= logDateTo);
+        const matchesModule = !logModule || log.module === logModule;
+        const matchesAction = !logAction || log.action === logAction;
+        const matchesOperator = !logOperator.trim() || (log.displayName ?? "").toLowerCase().includes(logOperator.trim().toLowerCase());
+        const matchesKeyword =
+          !keyword || `${log.description} ${log.entityType}`.toLowerCase().includes(keyword);
+        return matchesDate && matchesModule && matchesAction && matchesOperator && matchesKeyword;
+      })
+      .slice(-300)
+      .reverse();
+  }, [logAction, logDateFrom, logDateTo, logKeyword, logModule, logOperator, props.auditLogs]);
+
+  const auditModuleOptions = Array.from(new Set(props.auditLogs.map((log) => log.module)));
+  const auditActionOptions = Array.from(new Set(props.auditLogs.map((log) => log.action)));
+
   return (
-    <section className="recon-simple-panel settings-panel">
-      <div className="recon-panel-head">
-        <div>
-          <span>系统设置</span>
-          <strong>账号安全</strong>
+    <div className="recon-workspace">
+      <section className="recon-simple-panel settings-panel">
+        <div className="recon-panel-head">
+          <div>
+            <span>系统设置</span>
+            <strong>账号安全</strong>
+          </div>
         </div>
-      </div>
-      <form className="recon-form settings-password-form" onSubmit={submit}>
-        <Field label="当前密码" required>
-          <input autoComplete="current-password" onChange={(event) => setOldPassword(event.target.value)} type="password" value={oldPassword} />
-        </Field>
-        <Field label="新密码" required>
-          <input autoComplete="new-password" onChange={(event) => setNewPassword(event.target.value)} type="password" value={newPassword} />
-        </Field>
-        <Field label="确认新密码" required>
-          <input autoComplete="new-password" onChange={(event) => setConfirmPassword(event.target.value)} type="password" value={confirmPassword} />
-        </Field>
-        {message && <div className="settings-message">{message}</div>}
-        {error && <div className="settings-error">{error}</div>}
-        <div>
-          <button className="recon-button recon-button-primary" disabled={saving || !oldPassword || !newPassword || !confirmPassword} type="submit">
-            {saving ? "保存中..." : "修改密码"}
+        <form className="recon-form settings-password-form" onSubmit={submit}>
+          <Field label="当前密码" required>
+            <input autoComplete="current-password" onChange={(event) => setOldPassword(event.target.value)} type="password" value={oldPassword} />
+          </Field>
+          <Field label="新密码" required>
+            <input autoComplete="new-password" onChange={(event) => setNewPassword(event.target.value)} type="password" value={newPassword} />
+          </Field>
+          <Field label="确认新密码" required>
+            <input autoComplete="new-password" onChange={(event) => setConfirmPassword(event.target.value)} type="password" value={confirmPassword} />
+          </Field>
+          {message && <div className="settings-message">{message}</div>}
+          {error && <div className="settings-error">{error}</div>}
+          <div>
+            <button className="recon-button recon-button-primary" disabled={saving || !oldPassword || !newPassword || !confirmPassword} type="submit">
+              {saving ? "保存中..." : "修改密码"}
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <section className="recon-simple-panel settings-panel">
+        <div className="recon-panel-head">
+          <div>
+            <span>系统设置 / 操作日志</span>
+            <strong>关键财务数据修改全程可追溯（只读，不可删除）</strong>
+          </div>
+        </div>
+        <div className="module-filter-grid audit-log-filter-grid">
+          <label>
+            日期范围
+            <span className="financial-date-range">
+              <input aria-label="开始日期" onChange={(event) => setLogDateFrom(event.target.value)} type="date" value={logDateFrom} />
+              <b>至</b>
+              <input aria-label="结束日期" onChange={(event) => setLogDateTo(event.target.value)} type="date" value={logDateTo} />
+            </span>
+          </label>
+          <label>
+            操作人
+            <input onChange={(event) => setLogOperator(event.target.value)} placeholder="输入操作人" value={logOperator} />
+          </label>
+          <label>
+            模块
+            <AnimatedSelect
+              ariaLabel="模块"
+              onChange={setLogModule}
+              options={[{ label: "全部模块", value: "" }, ...auditModuleOptions.map((module) => ({ label: auditModuleLabels[module] ?? module, value: module }))]}
+              value={logModule}
+            />
+          </label>
+          <label>
+            操作类型
+            <AnimatedSelect
+              ariaLabel="操作类型"
+              onChange={setLogAction}
+              options={[{ label: "全部类型", value: "" }, ...auditActionOptions.map((action) => ({ label: auditActionLabels[action] ?? action, value: action }))]}
+              value={logAction}
+            />
+          </label>
+          <label>
+            关键词
+            <input onChange={(event) => setLogKeyword(event.target.value)} placeholder="对象 / 说明" value={logKeyword} />
+          </label>
+          <button
+            className="recon-button recon-button-light"
+            onClick={() => {
+              setLogDateFrom("");
+              setLogDateTo("");
+              setLogModule("");
+              setLogAction("");
+              setLogKeyword("");
+              setLogOperator("");
+            }}
+            type="button"
+          >
+            重置
           </button>
         </div>
-      </form>
-    </section>
+        <div className="recon-table-wrap">
+          <table className="recon-table recon-table-stable">
+            <colgroup>
+              <col style={{ width: "14%" }} />
+              <col style={{ width: "10%" }} />
+              <col style={{ width: "9%" }} />
+              <col style={{ width: "9%" }} />
+              <col style={{ width: "40%" }} />
+              <col style={{ width: "8%" }} />
+            </colgroup>
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>操作人</th>
+                <th>模块</th>
+                <th>操作类型</th>
+                <th>操作说明</th>
+                <th>详情</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredAuditLogs.length === 0 ? (
+                <tr>
+                  <td colSpan={6}>暂无符合条件的操作日志。修改客户、月度对账、款号应收、扣款调整、收款、开票、核销等关键数据后会自动记录。</td>
+                </tr>
+              ) : (
+                filteredAuditLogs.map((log) => (
+                  <tr key={log.id}>
+                    <td>{log.createdAt.replace("T", " ").slice(0, 19)}</td>
+                    <td>{log.displayName}</td>
+                    <td>{auditModuleLabels[log.module] ?? log.module}</td>
+                    <td>{auditActionLabels[log.action] ?? log.action}</td>
+                    <td className="audit-log-description">{log.description}</td>
+                    <td>
+                      <button className="recon-inline-action" onClick={() => setViewingLog(log)} type="button">
+                        详情
+                      </button>
+                    </td>
+                  </tr>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {viewingLog && (
+        <Modal onClose={() => setViewingLog(null)} size="receiptPool" title="操作日志详情">
+          <>
+            <div className="audit-detail-meta">
+              <div>
+                <span>操作说明</span>
+                <strong>{viewingLog.description}</strong>
+              </div>
+              <div>
+                <span>操作人</span>
+                <strong>{viewingLog.displayName}（{viewingLog.username}）</strong>
+              </div>
+              <div>
+                <span>时间</span>
+                <strong>{viewingLog.createdAt.replace("T", " ").slice(0, 19)}</strong>
+              </div>
+              <div>
+                <span>对象</span>
+                <strong>{viewingLog.entityType} / {viewingLog.entityId}</strong>
+              </div>
+            </div>
+            <div className="audit-detail-data">
+              {(["beforeData", "afterData"] as const).map((dataKey) => (
+                <div className="audit-detail-block" key={dataKey}>
+                  <h4>{dataKey === "beforeData" ? "修改前" : "修改后"}</h4>
+                  {viewingLog[dataKey] && Object.keys(viewingLog[dataKey]!).length > 0 ? (
+                    <table className="recon-detail-info-table">
+                      <tbody>
+                        {Object.entries(viewingLog[dataKey]!).map(([field, value]) => (
+                          <tr key={field}>
+                            <th>{auditFieldLabels[field] ?? field}</th>
+                            <td>{formatAuditValue(field, value)}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  ) : (
+                    <EmptyPanel text="无数据" />
+                  )}
+                </div>
+              ))}
+            </div>
+          </>
+        </Modal>
+      )}
+    </div>
   );
+}
+
+function formatAuditValue(field: string, value: unknown) {
+  if (value === null || value === undefined || value === "") return "（空）";
+  if (auditMoneyFields.has(field)) return `¥ ${formatMoney(Number(value))}`;
+  if (field === "lifecycle") return statementLifecycleLabels[value as StatementLifecycle] ?? String(value);
+  if (field === "direction") return value === "decrease" ? "调减" : "调增";
+  if (field === "isLocked") return value === true ? "已锁定" : "未锁定";
+  if (field === "needInvoiceBeforePayment") return value === true ? "是" : "否";
+  return String(value);
 }
 
 function FinancialRecordsModule(props: {
