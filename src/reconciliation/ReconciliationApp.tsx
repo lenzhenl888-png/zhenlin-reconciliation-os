@@ -58,6 +58,7 @@ import type {
   StatementLifecycle,
   StatementStatus,
   StyleAccount,
+  SettlementType,
 } from "./models";
 import {
   accountStatusOptions,
@@ -70,6 +71,7 @@ import {
   customerProfileStatusOptions,
   customerTypeOptions,
   paymentMethods,
+  settlementTypeOptions,
   statementHistoryActionLabels,
   statementLifecycleLabels,
   statementStatusOptions,
@@ -3171,6 +3173,35 @@ function CustomerProfilesModule(props: {
                 </label>
               </ProfileSection>
 
+              <ProfileSection title="结算规则">
+                <label className="customer-profile-toggle">
+                  <span>结算方式</span>
+                  <AnimatedSelect
+                    ariaLabel="结算方式"
+                    onChange={(value) => updateProfile({ settlementType: value as SettlementType })}
+                    options={toSelectOptions(settlementTypeOptions)}
+                    value={editingProfile.settlementType ?? "月结"}
+                  />
+                </label>
+                <ProfileInput
+                  label="账期天数"
+                  min="0"
+                  onChange={(value) => updateProfile({ paymentTermDays: value.trim() === "" ? undefined : Math.max(0, Math.round(Number(value) || 0)) })}
+                  placeholder="例如 30，留空则不自动计算到期日"
+                  step="1"
+                  type="number"
+                  value={editingProfile.paymentTermDays ?? ""}
+                />
+                <ProfileInput
+                  label="信用额度"
+                  min="0"
+                  onChange={(value) => updateProfile({ creditLimit: value.trim() === "" ? undefined : parseMoney(value) })}
+                  step="0.01"
+                  type="number"
+                  value={editingProfile.creditLimit ?? ""}
+                />
+              </ProfileSection>
+
               <ProfileSection title="地址信息">
                 <ProfileTextarea label="收货地址" onChange={(value) => updateProfile({ shippingAddress: value })} value={editingProfile.shippingAddress} />
                 <ProfileTextarea label="寄票地址" onChange={(value) => updateProfile({ invoiceMailingAddress: value })} value={editingProfile.invoiceMailingAddress} />
@@ -3238,6 +3269,7 @@ function ProfileInput(props: {
   label: string;
   min?: string;
   onChange(value: string): void;
+  placeholder?: string;
   required?: boolean;
   step?: string;
   type?: string;
@@ -3252,6 +3284,7 @@ function ProfileInput(props: {
       <input
         min={props.min}
         onChange={(event) => props.onChange(event.target.value)}
+        placeholder={props.placeholder}
         step={props.step}
         type={props.type ?? "text"}
         value={props.value}
