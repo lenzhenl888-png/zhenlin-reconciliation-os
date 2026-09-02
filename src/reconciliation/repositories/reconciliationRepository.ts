@@ -276,6 +276,18 @@ function normalizeStore(store: ReconciliationStore): ReconciliationStore {
     ...store,
     customerProfiles,
     statementAdjustments: store.statementAdjustments ?? [],
+    // V1.1 旧数据兼容：缺失的生命周期/版本号/日志容器全部补默认值，保证旧记录可正常打开。
+    auditLogs: Array.isArray(store.auditLogs) ? store.auditLogs : [],
+    statementConfirmationHistories: Array.isArray(store.statementConfirmationHistories)
+      ? store.statementConfirmationHistories
+      : [],
+    monthlyStatements: store.monthlyStatements.map((statement) => ({
+      ...statement,
+      lifecycle:
+        statement.lifecycle ??
+        (statement.status === "已确认" || statement.status === "已结清" ? ("confirmed" as const) : ("draft" as const)),
+      version: typeof statement.version === "number" && statement.version >= 1 ? statement.version : 1,
+    })),
     customers: store.customers.map((customer) => {
       const profile = profileById.get(customer.id);
       return profile

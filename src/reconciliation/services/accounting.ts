@@ -2,6 +2,7 @@ import type {
   AccountStatus,
   Customer,
   CustomerProfile,
+  CustomerReceipt,
   CustomerSummary,
   InvoiceStatus,
   MonthlyStatement,
@@ -249,6 +250,152 @@ function getInvoiceStatus(receivableTotal: number, invoicedTotal: number): Invoi
   if (receivableTotal <= 0 || invoicedTotal <= 0) return "未开票";
   if (invoicedTotal < receivableTotal) return "部分开票";
   return "已开票";
+}
+
+// ---------- V1.1 月度对账生命周期 ----------
+
+export function getStatementLifecycle(statement: MonthlyStatement): import("../models").StatementLifecycle {
+  if (statement.lifecycle) return statement.lifecycle;
+  // 旧数据兼容：草稿→draft，已确认/已结清→confirmed
+  if (statement.status === "已确认" || statement.status === "已结清") return "confirmed";
+  return "draft";
+}
+
+export function getStatementVersion(statement: MonthlyStatement) {
+  return typeof statement.version === "number" && statement.version >= 1 ? statement.version : 1;
+}
+
+export function getTodayDateString() {
+  const now = new Date();
+  const localDate = new Date(now.getTime() - now.getTimezoneOffset() * 60_000);
+  return localDate.toISOString().slice(0, 10);
+}
+
+function getMonthEndDate(periodMonth: string) {
+  const [year, month] = periodMonth.split("-").map(Number);
+  if (!year || !month) return `${periodMonth}-28`;
+  const monthEndDate = new Date(Date.UTC(year, month, 0));
+  return monthEndDate.toISOString().slice(0, 10);
+}
+
+function addDays(dateString: string, days: number) {
+  const date = new Date(`${dateString}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+export function suggestDueDate(periodMonth: string, paymentTermDays?: number) {
+  const days = typeof paymentTermDays === "number" && paymentTermDays > 0 ? Math.round(paymentTermDays) : 0;
+  if (!days) return "";
+  return addDays(getMonthEndDate(periodMonth), days);
+}
+
+export function getEffectiveDueDate(statement: MonthlyStatement, store: ReconciliationStore) {
+  if (statement.dueDate) return statement.dueDate;
+  const profile = getCustomerProfile(statement.customerId, store);
+  return suggestDueDate(statement.periodMonth, profile?.paymentTermDays);
+}
+
+export type StatementDueInfo = {
+  dueDate: string;
+  remainingReceivable: number;
+  dueStatus: import("../models").DueStatus;
+  dueStatusLabel: string;
+  overdueDays: number;
+  agingBucket: import("../models").AgingBucket;
+  agingLabel: string;
+};
+
+export function getStatementDueInfo(statement: MonthlyStatement, store: ReconciliationStore): StatementDueInfo {
+  const dueDate = getEffectiveDueDate(statement, store);
+  const remainingReceivable = roundMoney(Math.max(statement.closingBalance, 0));
+  const today = getTodayDateString();
+  let dueStatus: import("../models").DueStatus = "not_due";
+  let overdueDays = 0;
+
+  if (remainingReceivable <= 0) {
+    dueStatus = "settled";
+  } else if (dueDate && today > dueDate) {
+    dueStatus = "overdue";
+    overdueDays = Math.round((Date.parse(`${today}T00:00:00Z`) - Date.parse(`${dueDate}T00:00:00Z`)) / 86_400_000);
+  } else if (dueDate && today >= addDays(dueDate, -7)) {
+    dueStatus = "due_soon";
+  }
+
+  const agingBucket = getAgingBucket(dueStatus === "settled" ? 0 : dueStatus === "overdue" ? overdueDays : 0, dueStatus);
+  return {
+    dueDate,
+    remainingReceivable,
+    dueStatus,
+    dueStatusLabel: DUE_STATUS_LABELS[dueStatus],
+    overdueDays,
+    agingBucket,
+    agingLabel: AGING_BUCKET_LABELS[agingBucket],
+  };
+}
+
+function getAgingBucket(overdueDays: number, dueStatus: import("../models").DueStatus): import("../models").AgingBucket {
+  if (dueStatus === "settled") return "not_due";
+  if (dueStatus !== "overdue" || overdueDays <= 0) return "not_due";
+  if (overdueDays <= 30) return "days_1_30";
+  if (overdueDays <= 60) return "days_31_60";
+  if (overdueDays <= 90) return "days_61_90";
+  if (overdueDays <= 180) return "days_91_180";
+  return "days_180_plus";
+}
+
+const DUE_STATUS_LABELS: Record<import("../models").DueStatus, string> = {
+  settled: "已结清",
+  not_due: "未到期",
+  due_soon: "即将到期",
+  overdue: "已逾期",
+};
+
+const AGING_BUCKET_LABELS: Record<import("../models").AgingBucket, string> = {
+  not_due: "未到期",
+  days_1_30: "1-30天",
+  days_31_60: "31-60天",
+  days_61_90: "61-90天",
+  days_91_180: "91-180天",
+  days_180_plus: "180天以上",
+};
+
+export function getAgingBucketsSummary(
+  statementSummaries: Array<ReturnType<typeof summarizeStatement>>,
+  store: ReconciliationStore,
+) {
+  const summary: Record<import("../models").AgingBucket, number> = {
+    not_due: 0,
+    days_1_30: 0,
+    days_31_60: 0,
+    days_61_90: 0,
+    days_91_180: 0,
+    days_180_plus: 0,
+  };
+  statementSummaries.forEach((statementSummary) => {
+    const dueInfo = getStatementDueInfo(statementSummary.statement, store);
+    summary[dueInfo.agingBucket] = roundMoney(summary[dueInfo.agingBucket] + dueInfo.remainingReceivable);
+  });
+  return summary;
+}
+
+// ---------- V1.1 收款核销 ----------
+
+export type ReceiptSettlementInfo = {
+  allocatedAmount: number;
+  unallocatedAmount: number;
+  status: import("../models").ReceiptSettlementStatus;
+  statusLabel: string;
+};
+
+export function getReceiptSettlementInfo(receipt: CustomerReceipt, allocations: ReceiptAllocation[]): ReceiptSettlementInfo {
+  const allocatedAmount = getReceiptAllocatedAmount(receipt.id, allocations);
+  const unallocatedAmount = roundMoney(receipt.amount - allocatedAmount);
+  const status: import("../models").ReceiptSettlementStatus =
+    allocatedAmount <= 0 ? "unallocated" : unallocatedAmount > 0 ? "partial" : "allocated";
+  const statusLabel =
+    status === "unallocated" ? "未核销" : status === "partial" ? "部分核销" : "已核销";
+  return { allocatedAmount, unallocatedAmount, status, statusLabel };
 }
 
 function getPaymentStatus(receivableTotal: number, paidTotal: number): PaymentStatus {
