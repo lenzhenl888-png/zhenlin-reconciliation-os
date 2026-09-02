@@ -3260,8 +3260,39 @@ body.is-column-resizing * {
 }
 
 .module-filter-grid-wide {
-  grid-template-columns: minmax(150px, 180px) auto auto auto;
+  grid-template-columns: minmax(150px, 180px) auto auto auto auto;
   justify-content: start;
+}
+
+.aging-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(120px, 1fr));
+  gap: 10px;
+  margin-bottom: 16px;
+}
+
+.aging-summary-item {
+  display: grid;
+  gap: 4px;
+  border: 1px solid #dbe3ee;
+  border-radius: 8px;
+  padding: 10px 12px;
+  background: #f6f8fc;
+}
+
+.aging-summary-item span {
+  color: #6f7f93;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.aging-summary-item strong {
+  font-size: 15px;
+  font-weight: 900;
+}
+
+.aging-summary-item.is-danger strong {
+  color: #b42318;
 }
 
 .module-filter-range {

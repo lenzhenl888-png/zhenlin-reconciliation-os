@@ -61,6 +61,8 @@ import type {
 import {
   accountStatusOptions,
   adjustmentDirectionOptions,
+  agingBucketLabels,
+  agingBuckets,
   confirmationMethodOptions,
   customerProfileStatusOptions,
   customerTypeOptions,
@@ -79,6 +81,7 @@ import { readInvoiceImportFile, type InvoiceImportRow } from "./utils/invoiceImp
 import {
   accountMatchesStatus,
   formatMoney,
+  getAgingBucketsSummary,
   getAvailablePeriods,
   getCurrentPeriod,
   getCustomerDisplayName,
@@ -3192,17 +3195,31 @@ function SpreadsheetGridHeader<TColumnId extends string>(props: {
   );
 }
 
-type OverviewGridColumnId = "customer" | "periodMonth" | "status" | "styleCount" | "receivable" | "invoiced" | "received" | "closingBalance";
+type OverviewGridColumnId =
+  | "customer"
+  | "periodMonth"
+  | "status"
+  | "styleCount"
+  | "receivable"
+  | "invoiced"
+  | "received"
+  | "closingBalance"
+  | "dueDate"
+  | "overdueDays"
+  | "aging";
 
 const overviewGridColumns: Array<SpreadsheetGridColumn<OverviewGridColumnId>> = [
-  { id: "customer", label: "客户", minWidth: 160, width: "18%" },
-  { id: "periodMonth", label: "对账月份", minWidth: 132, width: "11%" },
-  { id: "status", label: "状态", minWidth: 112, width: "8%" },
-  { id: "styleCount", label: "款号数量", minWidth: 112, width: "10%" },
-  { id: "receivable", label: "本月应收", minWidth: 146, width: "14%" },
-  { id: "invoiced", label: "已开票", minWidth: 136, width: "13%" },
-  { id: "received", label: "已收款", minWidth: 136, width: "13%" },
-  { id: "closingBalance", label: "期末余额", minWidth: 146, width: "13%" },
+  { id: "customer", label: "客户", minWidth: 160, width: "15%" },
+  { id: "periodMonth", label: "对账月份", minWidth: 118, width: "9%" },
+  { id: "status", label: "状态", minWidth: 100, width: "7%" },
+  { id: "styleCount", label: "款号数量", minWidth: 100, width: "8%" },
+  { id: "receivable", label: "本月应收", minWidth: 140, width: "12%" },
+  { id: "invoiced", label: "已开票", minWidth: 130, width: "11%" },
+  { id: "received", label: "已收款", minWidth: 130, width: "11%" },
+  { id: "closingBalance", label: "期末余额", minWidth: 140, width: "12%" },
+  { id: "dueDate", label: "到期日", minWidth: 118, width: "9%" },
+  { id: "overdueDays", label: "逾期天数", minWidth: 100, width: "8%" },
+  { id: "aging", label: "账龄", minWidth: 110, width: "8%" },
 ];
 
 type InvoiceGridColumnId = "customer" | "styleNos" | "invoiceDate" | "invoiceNo" | "amount" | "note";
@@ -3257,6 +3274,7 @@ const STYLE_GRID_COLUMN_WIDTHS_STORAGE_KEY = "zhenlin-reconciliation.style-grid-
 
 function OverviewModule(props: { customers: Customer[]; store: Parameters<typeof summarizeAll>[1]; summary: ReturnType<typeof summarizeAll> }) {
   const [customerId, setCustomerId] = useState("");
+  const [showAgingAnalysis, setShowAgingAnalysis] = useState(false);
   const periodRange = getAvailablePeriods(props.store);
   const [periodFrom, setPeriodFrom] = useState(periodRange[periodRange.length - 1] ?? "");
   const [periodTo, setPeriodTo] = useState(periodRange[0] ?? "");
@@ -3290,19 +3308,26 @@ function OverviewModule(props: { customers: Customer[]; store: Parameters<typeof
     paidTotal: sumMoney(statementSummaries.map((item) => item.currentReceived)),
     unpaidAmount: sumMoney(statementSummaries.map((item) => item.closingBalance)),
   };
-  const overviewRows: Array<SpreadsheetGridRow<OverviewGridColumnId> & { summary: (typeof statementSummaries)[number] }> = statementSummaries.map((summary) => ({
-    summary,
-    values: {
-      customer: getCustomerDisplayName(summary.statement.customerId, props.store),
-      periodMonth: summary.statement.periodMonth,
-      status: summary.status,
-      styleCount: String(summary.items.length),
-      receivable: formatMoney(summary.currentReceivable),
-      invoiced: formatMoney(summary.currentInvoiced),
-      received: formatMoney(summary.currentReceived),
-      closingBalance: formatMoney(summary.closingBalance),
-    },
-  }));
+  const overviewRows: Array<SpreadsheetGridRow<OverviewGridColumnId> & { summary: (typeof statementSummaries)[number]; dueInfo: ReturnType<typeof getStatementDueInfo> }> = statementSummaries.map((summary) => {
+    const dueInfo = getStatementDueInfo(summary.statement, props.store);
+    return {
+      summary,
+      dueInfo,
+      values: {
+        customer: getCustomerDisplayName(summary.statement.customerId, props.store),
+        periodMonth: summary.statement.periodMonth,
+        status: summary.status,
+        styleCount: String(summary.items.length),
+        receivable: formatMoney(summary.currentReceivable),
+        invoiced: formatMoney(summary.currentInvoiced),
+        received: formatMoney(summary.currentReceived),
+        closingBalance: formatMoney(summary.closingBalance),
+        dueDate: dueInfo.dueDate || "-",
+        overdueDays: dueInfo.dueStatus === "overdue" ? `逾期${dueInfo.overdueDays}天` : dueInfo.dueStatusLabel,
+        aging: dueInfo.agingLabel,
+      },
+    };
+  });
   const overviewColumnValues = getSpreadsheetColumnValues(overviewGridColumns, overviewRows);
   const visibleOverviewRows = overviewRows.filter((row) =>
     overviewGridColumns.every((column) => {
@@ -3318,6 +3343,26 @@ function OverviewModule(props: { customers: Customer[]; store: Parameters<typeof
     paidTotal: sumMoney(visibleOverviewRows.map((row) => row.summary.currentReceived)),
     unpaidAmount: sumMoney(visibleOverviewRows.map((row) => row.summary.closingBalance)),
   };
+  const dueTotals = statementSummaries.reduce(
+    (totals, summary) => {
+      const dueInfo = getStatementDueInfo(summary.statement, props.store);
+      if (dueInfo.dueStatus === "overdue") {
+        totals.overdue = roundMoney(totals.overdue + dueInfo.remainingReceivable);
+        if (dueInfo.agingBucket === "days_91_180" || dueInfo.agingBucket === "days_180_plus") {
+          totals.over90 = roundMoney(totals.over90 + dueInfo.remainingReceivable);
+        }
+      } else {
+        totals.notDue = roundMoney(totals.notDue + dueInfo.remainingReceivable);
+      }
+      return totals;
+    },
+    { overdue: 0, over90: 0, notDue: 0 },
+  );
+  const agingSummary = getAgingBucketsSummary(statementSummaries, props.store);
+  const agingDetails = statementSummaries
+    .map((summary) => ({ summary, dueInfo: getStatementDueInfo(summary.statement, props.store) }))
+    .filter(({ dueInfo }) => dueInfo.remainingReceivable > 0)
+    .sort((left, right) => right.dueInfo.overdueDays - left.dueInfo.overdueDays);
   const overviewTableWidth = overviewColumnWidths?.reduce((sum, width) => sum + width, 0) ?? 1170;
 
   useEffect(() => {
@@ -3368,9 +3413,9 @@ function OverviewModule(props: { customers: Customer[]; store: Parameters<typeof
     <div className="recon-workspace">
       <section className="recon-stat-grid">
         <StatCard label="应收总额" value={filteredSummary.receivableTotal} icon={Banknote} />
-        <StatCard label="已开票总额" value={filteredSummary.invoicedTotal} icon={ReceiptText} />
-        <StatCard label="已收款总额" value={filteredSummary.paidTotal} icon={CreditCard} />
         <StatCard label="未收余额" value={filteredSummary.unpaidAmount} icon={BarChart3} tone="warning" />
+        <StatCard label="逾期应收" value={dueTotals.overdue} icon={AlertTriangle} tone="warning" />
+        <StatCard label="90天以上应收" value={dueTotals.over90} icon={ReceiptText} tone="warning" />
       </section>
       <section className="recon-simple-panel records-fill-page overview-records-page">
         <div className="recon-panel-head overview-records-head">
@@ -3434,6 +3479,10 @@ function OverviewModule(props: { customers: Customer[]; store: Parameters<typeof
             >
               重置
             </button>
+            <button className="recon-button recon-button-primary" onClick={() => setShowAgingAnalysis(true)} type="button">
+              <BarChart3 size={16} />
+              账龄分析
+            </button>
           </div>
         </div>
         <div className="receipt-grid-scroll overview-grid-scroll">
@@ -3476,7 +3525,7 @@ function OverviewModule(props: { customers: Customer[]; store: Parameters<typeof
               onToggleColumnValue={toggleOverviewColumnValue}
             />
             <tbody>
-              {visibleOverviewRows.map(({ summary }) => (
+              {visibleOverviewRows.map(({ summary, dueInfo }) => (
                 <tr key={summary.statement.id}>
                   <td>{getCustomerDisplayName(summary.statement.customerId, props.store)}</td>
                   <td>{summary.statement.periodMonth}</td>
@@ -3486,6 +3535,11 @@ function OverviewModule(props: { customers: Customer[]; store: Parameters<typeof
                   <td>¥ {formatMoney(summary.currentInvoiced)}</td>
                   <td>¥ {formatMoney(summary.currentReceived)}</td>
                   <td className={summary.closingBalance > 0 ? "is-danger" : "is-ok"}>¥ {formatMoney(summary.closingBalance)}</td>
+                  <td>{dueInfo.dueDate || "-"}</td>
+                  <td className={dueInfo.dueStatus === "overdue" ? "is-danger" : ""}>
+                    {dueInfo.dueStatus === "overdue" ? `逾期${dueInfo.overdueDays}天` : dueInfo.dueStatusLabel}
+                  </td>
+                  <td>{dueInfo.agingLabel}</td>
                 </tr>
               ))}
             </tbody>
@@ -3501,6 +3555,65 @@ function OverviewModule(props: { customers: Customer[]; store: Parameters<typeof
           </div>
         </footer>
       </section>
+      {showAgingAnalysis && (
+        <Modal onClose={() => setShowAgingAnalysis(false)} size="receiptPool" title="账龄分析">
+          <>
+            <div className="aging-summary-grid">
+              {agingBuckets.map((bucket) => (
+                <div className={`aging-summary-item ${bucket === "days_91_180" || bucket === "days_180_plus" ? "is-danger" : ""}`} key={bucket}>
+                  <span>{agingBucketLabels[bucket]}</span>
+                  <strong>¥ {formatMoney(agingSummary[bucket])}</strong>
+                </div>
+              ))}
+            </div>
+            <div className="recon-table-wrap">
+              <table className="recon-table recon-table-stable">
+                <colgroup>
+                  <col style={{ width: "18%" }} />
+                  <col style={{ width: "12%" }} />
+                  <col style={{ width: "14%" }} />
+                  <col style={{ width: "14%" }} />
+                  <col style={{ width: "12%" }} />
+                  <col style={{ width: "12%" }} />
+                  <col style={{ width: "18%" }} />
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th>客户</th>
+                    <th>对账月份</th>
+                    <th>未收金额</th>
+                    <th>到期日</th>
+                    <th>逾期天数</th>
+                    <th>账龄</th>
+                    <th>对账状态</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {agingDetails.length === 0 ? (
+                    <tr>
+                      <td colSpan={7}>当前筛选范围内没有未收账款。</td>
+                    </tr>
+                  ) : (
+                    agingDetails.map(({ summary, dueInfo }) => (
+                      <tr key={summary.statement.id}>
+                        <td>{getCustomerDisplayName(summary.statement.customerId, props.store)}</td>
+                        <td>{summary.statement.periodMonth}</td>
+                        <td className="is-danger">¥ {formatMoney(dueInfo.remainingReceivable)}</td>
+                        <td>{dueInfo.dueDate || "-"}</td>
+                        <td className={dueInfo.dueStatus === "overdue" ? "is-danger" : ""}>
+                          {dueInfo.dueStatus === "overdue" ? `${dueInfo.overdueDays} 天` : "-"}
+                        </td>
+                        <td>{dueInfo.agingLabel}</td>
+                        <td>{summary.status}</td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </>
+        </Modal>
+      )}
     </div>
   );
 }
