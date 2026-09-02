@@ -779,6 +779,65 @@
   font-weight: 600;
 }
 
+.settlement-status {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.settlement-status.is-unallocated {
+  border: 1px solid #fda4af;
+  background: #fee2e2;
+  color: #b42318;
+}
+
+.settlement-status.is-partial {
+  border: 1px solid #fcd34d;
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.settlement-status.is-allocated {
+  border: 1px solid #86efac;
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.settlement-summary {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(110px, 1fr));
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.settlement-summary > div {
+  display: grid;
+  gap: 3px;
+  border: 1px solid #dbe3ee;
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: #f6f8fc;
+}
+
+.settlement-summary span {
+  color: #6f7f93;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.settlement-summary strong {
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.settlement-summary strong.is-danger {
+  color: #b42318;
+}
+
 .recon-field small {
   color: #6f7f93;
   font-size: 12px;

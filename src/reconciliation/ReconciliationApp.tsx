@@ -1189,7 +1189,11 @@ export function ReconciliationApp() {
   }
 
   function createAllocation(values: ReceiptAllocation | ReceiptAllocation[]) {
-    const nextAllocations = Array.isArray(values) ? values : [values];
+    const nextAllocations = (Array.isArray(values) ? values : [values]).map((allocation) => ({
+      ...allocation,
+      createdBy: allocation.createdBy ?? currentUserLabel,
+      createdAt: allocation.createdAt ?? new Date().toISOString(),
+    }));
     if (nextAllocations.length === 0) return;
     updateStore((currentStore) => ({
       ...currentStore,
@@ -1207,7 +1211,7 @@ export function ReconciliationApp() {
   }
 
   function deleteAllocation(allocationId: string) {
-    if (!window.confirm("确认删除这条收款分配吗？")) return;
+    if (!window.confirm("确认撤销这条收款核销吗？撤销后对应账期未收余额将自动恢复，操作会记入操作日志。")) return;
     updateStore((currentStore) => ({
       ...currentStore,
       receiptAllocations: currentStore.receiptAllocations.filter((allocation) => allocation.id !== allocationId),
@@ -2341,8 +2345,12 @@ function PaymentAllocationCards(props: {
             </div>
             <dl>
               <div>
-                <dt>分配金额</dt>
+                <dt>本次核销金额</dt>
                 <dd>¥ {formatMoney(allocation.allocatedAmount)}</dd>
+              </div>
+              <div>
+                <dt>收款方式</dt>
+                <dd>{receipt?.method ?? "-"}</dd>
               </div>
               <div>
                 <dt>流水号</dt>
@@ -3233,7 +3241,18 @@ const invoiceGridColumns: Array<SpreadsheetGridColumn<InvoiceGridColumnId>> = [
   { id: "note", label: "备注", minWidth: 170, width: "14%" },
 ];
 
-type FinancialGridColumnId = "date" | "customer" | "documentNo" | "method" | "receiptAmount" | "invoiceAmount" | "note" | "actions";
+type FinancialGridColumnId =
+  | "date"
+  | "customer"
+  | "documentNo"
+  | "method"
+  | "receiptAmount"
+  | "receiptAllocated"
+  | "receiptUnallocated"
+  | "settlementStatus"
+  | "invoiceAmount"
+  | "note"
+  | "actions";
 
 type FinancialGridRow = SpreadsheetGridRow<FinancialGridColumnId> & {
   customerId: string;
@@ -3244,14 +3263,17 @@ type FinancialGridRow = SpreadsheetGridRow<FinancialGridColumnId> & {
 };
 
 const financialGridColumns: Array<SpreadsheetGridColumn<FinancialGridColumnId>> = [
-  { id: "date", label: "日期", minWidth: 126, width: "10%" },
-  { id: "customer", label: "客户", minWidth: 158, width: "15%" },
-  { id: "documentNo", label: "单据编号", minWidth: 172, width: "16%" },
-  { id: "method", label: "收款方式", minWidth: 132, width: "12%" },
-  { id: "receiptAmount", label: "收款金额", minWidth: 142, width: "13%" },
-  { id: "invoiceAmount", label: "开票金额", minWidth: 142, width: "13%" },
-  { id: "note", label: "备注", minWidth: 166, width: "11%" },
-  { filterable: false, id: "actions", label: "操作", minWidth: 112, width: "10%" },
+  { id: "date", label: "日期", minWidth: 118, width: "9%" },
+  { id: "customer", label: "客户", minWidth: 148, width: "11%" },
+  { id: "documentNo", label: "单据编号", minWidth: 156, width: "12%" },
+  { id: "method", label: "收款方式", minWidth: 118, width: "9%" },
+  { id: "receiptAmount", label: "收款金额", minWidth: 132, width: "10%" },
+  { id: "receiptAllocated", label: "已核销", minWidth: 122, width: "9%" },
+  { id: "receiptUnallocated", label: "未核销", minWidth: 122, width: "9%" },
+  { id: "settlementStatus", label: "核销状态", minWidth: 118, width: "9%" },
+  { id: "invoiceAmount", label: "开票金额", minWidth: 132, width: "10%" },
+  { id: "note", label: "备注", minWidth: 150, width: "8%" },
+  { filterable: false, id: "actions", label: "操作", minWidth: 104, width: "4%" },
 ];
 
 type StyleGridColumnId = "styleNo" | "receivable" | "invoiced" | "received" | "adjustment" | "unpaid" | "status" | "actions";
@@ -4346,6 +4368,7 @@ function FinancialRecordsModule(props: {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [keyword, setKeyword] = useState("");
+  const [settlementStatusFilter, setSettlementStatusFilter] = useState<import("./models").ReceiptSettlementStatus | "">("");
   const [columnQueries, setColumnQueries] = useState<Record<FinancialGridColumnId, string>>(() => createSpreadsheetColumnQueries(financialGridColumns));
   const [columnSelections, setColumnSelections] = useState<Partial<Record<FinancialGridColumnId, string[]>>>({});
   const [activeFilterColumn, setActiveFilterColumn] = useState<FinancialGridColumnId | null>(null);
@@ -4372,22 +4395,28 @@ function FinancialRecordsModule(props: {
 
   const financialRows = useMemo<FinancialGridRow[]>(() => {
     const getCustomerName = (recordCustomerId: string) => customerOptions.find((option) => option.value === recordCustomerId)?.label ?? "未命名客户";
-    const receiptRows = props.receipts.map<FinancialGridRow>((receipt) => ({
-      customerId: receipt.customerId,
-      date: receipt.receiptDate,
-      receipt,
-      type: "receipt",
-      values: {
-        actions: "",
-        customer: getCustomerName(receipt.customerId),
+    const receiptRows = props.receipts.map<FinancialGridRow>((receipt) => {
+      const settlement = getReceiptSettlementInfo(receipt, props.allocations);
+      return {
+        customerId: receipt.customerId,
         date: receipt.receiptDate,
-        documentNo: receipt.transactionNo || "-",
-        invoiceAmount: "-",
-        method: receipt.method || "-",
-        note: receipt.note || "-",
-        receiptAmount: `¥ ${formatMoney(receipt.amount)}`,
-      },
-    }));
+        receipt,
+        type: "receipt",
+        values: {
+          actions: "",
+          customer: getCustomerName(receipt.customerId),
+          date: receipt.receiptDate,
+          documentNo: receipt.transactionNo || "-",
+          invoiceAmount: "-",
+          method: receipt.method || "-",
+          note: receipt.note || "-",
+          receiptAmount: `¥ ${formatMoney(receipt.amount)}`,
+          receiptAllocated: `¥ ${formatMoney(settlement.allocatedAmount)}`,
+          receiptUnallocated: `¥ ${formatMoney(settlement.unallocatedAmount)}`,
+          settlementStatus: settlement.statusLabel,
+        },
+      };
+    });
     const invoiceRows = props.invoices.map<FinancialGridRow>((invoice) => ({
       customerId: invoice.customerId,
       date: invoice.invoiceDate,
@@ -4402,10 +4431,13 @@ function FinancialRecordsModule(props: {
         method: "-",
         note: invoice.note || "-",
         receiptAmount: "-",
+        receiptAllocated: "-",
+        receiptUnallocated: "-",
+        settlementStatus: "-",
       },
     }));
     return [...receiptRows, ...invoiceRows].sort((left, right) => right.date.localeCompare(left.date));
-  }, [customerOptions, props.invoices, props.receipts]);
+  }, [customerOptions, props.allocations, props.invoices, props.receipts]);
 
   const topFilteredRows = financialRows.filter((row) => {
     const matchesCustomer = !customerId || row.customerId === customerId;
@@ -4413,7 +4445,9 @@ function FinancialRecordsModule(props: {
     const matchesKeyword =
       !keyword.trim() ||
       `${row.values.documentNo} ${row.values.note}`.toLowerCase().includes(keyword.trim().toLowerCase());
-    return matchesCustomer && matchesDate && matchesKeyword;
+    const matchesSettlement =
+      !settlementStatusFilter || row.type !== "receipt" || getReceiptSettlementInfo(row.receipt!, props.allocations).status === settlementStatusFilter;
+    return matchesCustomer && matchesDate && matchesKeyword && matchesSettlement;
   });
   const financialColumnValues = getSpreadsheetColumnValues(financialGridColumns, topFilteredRows);
   const visibleFinancialRows = topFilteredRows.filter((row) =>
@@ -4504,6 +4538,7 @@ function FinancialRecordsModule(props: {
     setDateFrom("");
     setDateTo("");
     setKeyword("");
+    setSettlementStatusFilter("");
     setColumnQueries(createSpreadsheetColumnQueries(financialGridColumns));
     setColumnSelections({});
     setActiveFilterColumn(null);
@@ -4567,6 +4602,20 @@ function FinancialRecordsModule(props: {
           <label>
             单据编号 / 备注
             <input onChange={(event) => setKeyword(event.target.value)} placeholder="输入关键词" value={keyword} />
+          </label>
+          <label>
+            核销状态
+            <AnimatedSelect
+              ariaLabel="核销状态"
+              onChange={(value) => setSettlementStatusFilter(value as import("./models").ReceiptSettlementStatus | "")}
+              options={[
+                { label: "全部状态", value: "" },
+                { label: "未核销", value: "unallocated" },
+                { label: "部分核销", value: "partial" },
+                { label: "已核销", value: "allocated" },
+              ]}
+              value={settlementStatusFilter}
+            />
           </label>
           <button className="recon-button recon-button-light" onClick={resetFilters} type="button">重置</button>
         </div>
@@ -4636,6 +4685,17 @@ function FinancialRecordsModule(props: {
                   <td>{row.values.documentNo}</td>
                   <td>{row.values.method}</td>
                   <td className={row.type === "receipt" ? "financial-amount is-receipt" : "financial-amount"}>{row.values.receiptAmount}</td>
+                  <td className="financial-amount">{row.values.receiptAllocated}</td>
+                  <td className="financial-amount">{row.values.receiptUnallocated}</td>
+                  <td>
+                    {row.type === "receipt" ? (
+                      <span className={`settlement-status is-${
+                        getReceiptSettlementInfo(row.receipt!, props.allocations).status
+                      }`}>{row.values.settlementStatus}</span>
+                    ) : (
+                      "-"
+                    )}
+                  </td>
                   <td className={row.type === "invoice" ? "financial-amount is-invoice" : "financial-amount"}>{row.values.invoiceAmount}</td>
                   <td>{row.values.note}</td>
                   <td>
@@ -5509,8 +5569,9 @@ function ReceiptPoolModal(props: {
                 <th>收款金额</th>
                 <th>收款方式</th>
                 <th>流水号 / 承兑编号</th>
-                <th>已分配金额</th>
-                <th>未分配金额</th>
+                <th>已核销</th>
+                <th>未核销</th>
+                <th>核销状态</th>
                 <th>备注</th>
                 <th>操作</th>
               </tr>
@@ -5563,16 +5624,21 @@ function ReceiptPoolModal(props: {
                       ¥ {formatMoney(amount - allocatedAmount)}
                     </td>
                     <td>
+                      <span className={`settlement-status is-${amount - allocatedAmount <= 0 ? "allocated" : allocatedAmount > 0 ? "partial" : "unallocated"}`}>
+                        {amount - allocatedAmount <= 0 ? "已核销" : allocatedAmount > 0 ? "部分核销" : "未核销"}
+                      </span>
+                    </td>
+                    <td>
                       <input disabled={row.isLocked} onChange={(event) => updateRow(row.id, { note: event.target.value })} value={row.note} />
                     </td>
                     <td>
                       <div className="receipt-pool-actions">
                         <button
-                          aria-label="分配收款"
+                          aria-label="收款核销"
                           className="receipt-pool-icon-action is-allocate"
                           disabled={row.isLocked || row.isNew || amount <= allocatedAmount}
                           onClick={() => setAllocationReceiptId(row.id)}
-                          title={row.isNew ? "请先保存收款后再分配" : row.isLocked ? "该收款已锁定" : "收款分配"}
+                          title={row.isNew ? "请先保存收款后再核销" : row.isLocked ? "该收款已锁定" : "收款核销"}
                           type="button"
                         >
                           <Network size={16} />
@@ -5649,21 +5715,23 @@ function ReceiptPoolModal(props: {
         </div>
       </div>
       </Modal>
-      {allocationReceiptId && props.customer && (
-        <AllocationModal
-          customerId={props.customer.id}
-          defaultReceiptId={allocationReceiptId}
-          receipts={props.receipts}
-          receiptAllocations={props.allocations}
-          statements={props.statements}
-          store={props.store}
-          onClose={() => setAllocationReceiptId(undefined)}
-          onSubmit={(allocation) => {
-            props.onSubmitAllocation(allocation);
-            setAllocationReceiptId(undefined);
-          }}
-        />
-      )}
+      {allocationReceiptId && props.customer && (() => {
+        const receipt = props.receipts.find((item) => item.id === allocationReceiptId);
+        if (!receipt) return null;
+        return (
+          <SettlementModal
+            allocations={props.allocations}
+            customer={props.customer}
+            receipt={receipt}
+            store={props.store}
+            onClose={() => setAllocationReceiptId(undefined)}
+            onSubmitAllocation={(allocations) => {
+              props.onSubmitAllocation(allocations);
+              setAllocationReceiptId(undefined);
+            }}
+          />
+        );
+      })()}
       {pendingConfirmation && (
         <ConfirmationDialog
           confirmLabel={pendingConfirmation.type === "delete" ? "确认删除" : "确认解锁"}
@@ -5999,6 +6067,187 @@ function InvoiceAllocationModal(props: {
         <Field label="备注"><textarea onChange={(event) => setNote(event.target.value)} value={note} /></Field>
         <ModalActions onClose={props.onClose} submitLabel="保存分配" />
       </form>
+    </Modal>
+  );
+}
+
+function SettlementModal(props: {
+  allocations: ReceiptAllocation[];
+  customer?: Customer;
+  onClose(): void;
+  onSubmitAllocation(allocations: ReceiptAllocation | ReceiptAllocation[]): void;
+  receipt: CustomerReceipt;
+  store: Parameters<typeof summarizeStatement>[1];
+}) {
+  const settlement = getReceiptSettlementInfo(props.receipt, props.allocations);
+  const statementRows = props.store.monthlyStatements
+    .filter((statement) => statement.customerId === props.receipt.customerId)
+    .sort((left, right) => left.periodMonth.localeCompare(right.periodMonth))
+    .map((statement) => ({ summary: summarizeStatement(statement, props.store), dueInfo: getStatementDueInfo(statement, props.store) }));
+  const openRows = statementRows.filter(({ summary }) => summary.closingBalance > 0);
+  const [amountInputs, setAmountInputs] = useState<Record<string, string>>({});
+  const [error, setError] = useState("");
+
+  const pendingTotal = sumMoney(Object.values(amountInputs).map((value) => parseMoney(value)));
+  const remaining = roundMoney(settlement.unallocatedAmount - pendingTotal);
+
+  function setRowAmount(statementId: string, value: string) {
+    setAmountInputs((current) => ({ ...current, [statementId]: value }));
+    setError("");
+  }
+
+  function autoAllocate() {
+    let pool = settlement.unallocatedAmount;
+    const nextInputs: Record<string, string> = {};
+    [...openRows]
+      .sort((left, right) => {
+        const leftKey = left.dueInfo.dueDate || `${left.summary.statement.periodMonth}-01`;
+        const rightKey = right.dueInfo.dueDate || `${right.summary.statement.periodMonth}-01`;
+        return leftKey.localeCompare(rightKey);
+      })
+      .forEach(({ summary }) => {
+        if (pool <= 0) return;
+        const target = Math.min(pool, summary.closingBalance);
+        if (target > 0) {
+          nextInputs[summary.statement.id] = target.toFixed(2);
+          pool = roundMoney(pool - target);
+        }
+      });
+    setAmountInputs(nextInputs);
+    setError("");
+  }
+
+  function submit() {
+    const rows = statementRows
+      .map(({ summary }) => ({ statementId: summary.statement.id, periodMonth: summary.statement.periodMonth, amount: parseMoney(amountInputs[summary.statement.id] ?? "0"), outstanding: summary.closingBalance }))
+      .filter((row) => row.amount > 0);
+    if (rows.length === 0) {
+      setError("请至少为一个账期填写核销金额。");
+      return;
+    }
+    if (pendingTotal > settlement.unallocatedAmount + 0.001) {
+      setError("核销金额合计不能超过剩余可核销金额。");
+      return;
+    }
+    const overAllocated = rows.find((row) => row.amount > row.outstanding + 0.001);
+    if (overAllocated) {
+      setError(`账期 ${overAllocated.periodMonth} 的核销金额不能超过当前未收金额 ¥ ${formatMoney(overAllocated.outstanding)}。`);
+      return;
+    }
+    const today = getTodayString();
+    props.onSubmitAllocation(
+      rows.map((row) => ({
+        id: createId("ralloc"),
+        receiptId: props.receipt.id,
+        customerId: props.receipt.customerId,
+        statementId: row.statementId,
+        allocatedAmount: row.amount,
+        allocationDate: today,
+        note: "收款核销",
+      })),
+    );
+  }
+
+  return (
+    <Modal onClose={props.onClose} size="receiptPool" title="收款核销">
+      <>
+        <div className="settlement-summary">
+          <div>
+            <span>本笔收款</span>
+            <strong>¥ {formatMoney(props.receipt.amount)}</strong>
+          </div>
+          <div>
+            <span>已核销</span>
+            <strong>¥ {formatMoney(settlement.allocatedAmount)}</strong>
+          </div>
+          <div>
+            <span>剩余可核销</span>
+            <strong>¥ {formatMoney(settlement.unallocatedAmount)}</strong>
+          </div>
+          <div>
+            <span>本次已填</span>
+            <strong className={remaining < 0 ? "is-danger" : ""}>¥ {formatMoney(pendingTotal)}</strong>
+          </div>
+          <div>
+            <span>客户</span>
+            <strong>{props.customer?.name ?? "-"}</strong>
+          </div>
+          <div>
+            <span>收款日期</span>
+            <strong>{props.receipt.receiptDate}</strong>
+          </div>
+        </div>
+      <div className="recon-table-wrap">
+        <table className="recon-table recon-table-stable">
+          <colgroup>
+            <col style={{ width: "12%" }} />
+            <col style={{ width: "12%" }} />
+            <col style={{ width: "12%" }} />
+            <col style={{ width: "10%" }} />
+            <col style={{ width: "12%" }} />
+            <col style={{ width: "12%" }} />
+            <col style={{ width: "12%" }} />
+            <col style={{ width: "18%" }} />
+          </colgroup>
+          <thead>
+            <tr>
+              <th>对账月份</th>
+              <th>期初余额</th>
+              <th>本月应收</th>
+              <th>调整</th>
+              <th>已核销</th>
+              <th>当前未收</th>
+              <th>到期日</th>
+              <th>本次核销金额</th>
+            </tr>
+          </thead>
+          <tbody>
+            {openRows.length === 0 ? (
+              <tr>
+                <td colSpan={8}>该客户没有未结清的月度对账单，这笔收款将保留在未核销收款中。</td>
+              </tr>
+            ) : (
+              openRows.map(({ summary, dueInfo }) => (
+                <tr key={summary.statement.id}>
+                  <td>{summary.statement.periodMonth}</td>
+                  <td>¥ {formatMoney(summary.realtimeOpeningBalance)}</td>
+                  <td>¥ {formatMoney(summary.currentReceivable)}</td>
+                  <td className={summary.adjustmentNetAmount < 0 ? "is-danger" : ""}>
+                    {summary.adjustmentNetAmount === 0 ? "¥ 0.00" : `${summary.adjustmentNetAmount > 0 ? "+" : "-"}¥ ${formatMoney(Math.abs(summary.adjustmentNetAmount))}`}
+                  </td>
+                  <td>¥ {formatMoney(summary.currentReceived)}</td>
+                  <td className={summary.closingBalance > 0 ? "is-danger" : "is-ok"}>¥ {formatMoney(summary.closingBalance)}</td>
+                  <td>{dueInfo.dueDate || "-"}</td>
+                  <td>
+                    <input
+                      max={summary.closingBalance}
+                      min="0"
+                      onChange={(event) => setRowAmount(summary.statement.id, event.target.value)}
+                      placeholder="0.00"
+                      step="0.01"
+                      type="number"
+                      value={amountInputs[summary.statement.id] ?? ""}
+                    />
+                  </td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </div>
+      {error && <div className="receipt-pool__error">{error}</div>}
+      <div className="recon-modal-actions">
+        <button className="recon-button recon-button-light" disabled={openRows.length === 0} onClick={autoAllocate} type="button">
+          自动核销（最早到期优先）
+        </button>
+        <button className="recon-button recon-button-light" onClick={props.onClose} type="button">
+          取消
+        </button>
+        <button className="recon-button recon-button-primary" disabled={openRows.length === 0} onClick={submit} type="button">
+          确认核销
+        </button>
+      </div>
+      </>
     </Modal>
   );
 }
