@@ -38,28 +38,35 @@ import { Particles } from "../components/common/Particles";
 import type {
   AccountStatus,
   AdjustmentDirection,
+  AuditLog,
   Customer,
   CustomerInvoice,
   CustomerProfile,
   CustomerProfileStatus,
-  CustomerType,
   CustomerReceipt,
+  CustomerType,
   InvoiceRecord,
   InvoiceAllocation,
   MonthlyStatement,
   PaymentMethod,
   ReceiptAllocation,
   StatementAdjustment,
+  StatementConfirmationHistory,
+  StatementHistoryAction,
   StatementItem,
+  StatementLifecycle,
   StatementStatus,
   StyleAccount,
 } from "./models";
 import {
   accountStatusOptions,
   adjustmentDirectionOptions,
+  confirmationMethodOptions,
   customerProfileStatusOptions,
   customerTypeOptions,
   paymentMethods,
+  statementHistoryActionLabels,
+  statementLifecycleLabels,
   statementStatusOptions,
 } from "./models";
 import { reconciliationRepository } from "./repositories/reconciliationRepository";
@@ -80,8 +87,13 @@ import {
   getAdjustmentSignedAmount,
   getInvoiceAllocatedAmount,
   getReceiptAllocatedAmount,
+  getReceiptSettlementInfo,
+  getStatementDueInfo,
+  getStatementLifecycle,
+  getStatementVersion,
   parseMoney,
   roundMoney,
+  suggestDueDate,
   sumMoney,
   summarizeAll,
   summarizeCustomer,
@@ -101,6 +113,10 @@ type ModalState =
   | { type: "allocation"; customerId: string; receiptId?: string; returnToPool?: boolean; statementId?: string }
   | { type: "invoiceAllocation"; customerId: string; invoiceId?: string; returnToPool?: boolean; statementId?: string }
   | { type: "statementPreview" }
+  | { type: "statementConfirm"; statementId: string }
+  | { type: "statementUnconfirm"; statementId: string }
+  | { type: "statementHistory"; statementId: string }
+  | { type: "settlement"; customerId: string; receiptId: string; returnToPool?: boolean }
   | null;
 
 type Filters = {
@@ -577,10 +593,16 @@ export function ReconciliationApp() {
     }
   }
 
+  function isStatementLockedById(statementId: string) {
+    const statement = store.monthlyStatements.find((item) => item.id === statementId);
+    return !!statement && getStatementLifecycle(statement) === "locked";
+  }
+
   function createStatement(values: {
     customerId: string;
     periodMonth: string;
     openingBalance: number;
+    dueDate: string;
     note: string;
   }) {
     const existingStatement = store.monthlyStatements.find(
@@ -603,6 +625,11 @@ export function ReconciliationApp() {
       currentInvoiced: 0,
       closingBalance: values.openingBalance,
       status: "草稿",
+      lifecycle: "draft",
+      dueDate: values.dueDate || undefined,
+      version: 1,
+      lastModifiedAt: today,
+      lastModifiedBy: currentUserLabel,
       note: values.note,
       createdAt: today,
       updatedAt: today,
@@ -612,14 +639,153 @@ export function ReconciliationApp() {
     setSelectedPeriod(statement.periodMonth);
   }
 
-  function updateStatementStatus(statementId: string, status: StatementStatus) {
+  function appendStatementHistory(
+    currentStore: typeof store,
+    statement: MonthlyStatement,
+    action: StatementHistoryAction,
+    statusBefore: StatementLifecycle,
+    statusAfter: StatementLifecycle,
+    extra?: { method?: import("./models").ConfirmationMethod; note?: string },
+  ): StatementConfirmationHistory[] {
+    const entry: StatementConfirmationHistory = {
+      id: createId("sth"),
+      statementId: statement.id,
+      version: getStatementVersion(statement),
+      action,
+      statusBefore,
+      statusAfter,
+      confirmedAmount: roundMoney(Math.max(statement.closingBalance, 0)),
+      operatorId: auth.user?.id ?? "local-dev-user",
+      operatorName: currentUserLabel ?? "未知用户",
+      occurredAt: `${getTodayString()} ${new Date().toTimeString().slice(0, 5)}`,
+      method: extra?.method,
+      note: extra?.note,
+    };
+    return [...(currentStore.statementConfirmationHistories ?? []), entry];
+  }
+
+  function sendStatement(statementId: string) {
     const today = getTodayString();
-    updateStore((currentStore) => ({
-      ...currentStore,
-      monthlyStatements: currentStore.monthlyStatements.map((statement) =>
-        statement.id === statementId ? { ...statement, status, updatedAt: today } : statement,
-      ),
-    }));
+    updateStore((currentStore) => {
+      const statement = currentStore.monthlyStatements.find((item) => item.id === statementId);
+      if (!statement || getStatementLifecycle(statement) !== "draft") return currentStore;
+      const nextStatement: MonthlyStatement = {
+        ...statement,
+        lifecycle: "sent",
+        sentAt: today,
+        sentBy: currentUserLabel,
+        lastModifiedAt: today,
+        lastModifiedBy: currentUserLabel,
+        updatedAt: today,
+      };
+      return {
+        ...currentStore,
+        monthlyStatements: currentStore.monthlyStatements.map((item) => (item.id === statementId ? nextStatement : item)),
+        statementConfirmationHistories: appendStatementHistory(currentStore, nextStatement, "send", "draft", "sent"),
+      };
+    });
+  }
+
+  function withdrawStatement(statementId: string) {
+    const today = getTodayString();
+    updateStore((currentStore) => {
+      const statement = currentStore.monthlyStatements.find((item) => item.id === statementId);
+      if (!statement || getStatementLifecycle(statement) !== "sent") return currentStore;
+      const nextStatement: MonthlyStatement = {
+        ...statement,
+        lifecycle: "draft",
+        sentAt: undefined,
+        sentBy: undefined,
+        lastModifiedAt: today,
+        lastModifiedBy: currentUserLabel,
+        updatedAt: today,
+      };
+      return {
+        ...currentStore,
+        monthlyStatements: currentStore.monthlyStatements.map((item) => (item.id === statementId ? nextStatement : item)),
+        statementConfirmationHistories: appendStatementHistory(currentStore, nextStatement, "withdraw", "sent", "draft"),
+      };
+    });
+  }
+
+  function confirmStatement(statementId: string, values: { confirmedAt: string; confirmationMethod: import("./models").ConfirmationMethod; confirmedBy: string; confirmationNote: string }) {
+    const today = getTodayString();
+    updateStore((currentStore) => {
+      const statement = currentStore.monthlyStatements.find((item) => item.id === statementId);
+      if (!statement || getStatementLifecycle(statement) !== "sent") return currentStore;
+      const hadConfirmedBefore = (currentStore.statementConfirmationHistories ?? []).some(
+        (history) => history.statementId === statementId && history.action === "confirm",
+      );
+      const nextStatement: MonthlyStatement = {
+        ...statement,
+        lifecycle: "confirmed",
+        status: statement.closingBalance <= 0 ? statement.status : "已确认",
+        confirmedAt: values.confirmedAt,
+        confirmedBy: values.confirmedBy || currentUserLabel,
+        confirmationMethod: values.confirmationMethod,
+        confirmationNote: values.confirmationNote,
+        version: getStatementVersion(statement) + (hadConfirmedBefore ? 1 : 0),
+        lastModifiedAt: today,
+        lastModifiedBy: currentUserLabel,
+        updatedAt: today,
+      };
+      return {
+        ...currentStore,
+        monthlyStatements: currentStore.monthlyStatements.map((item) => (item.id === statementId ? nextStatement : item)),
+        statementConfirmationHistories: appendStatementHistory(currentStore, nextStatement, "confirm", "sent", "confirmed", {
+          method: values.confirmationMethod,
+          note: values.confirmationNote,
+        }),
+      };
+    });
+  }
+
+  function unconfirmStatement(statementId: string, reason: string) {
+    const today = getTodayString();
+    updateStore((currentStore) => {
+      const statement = currentStore.monthlyStatements.find((item) => item.id === statementId);
+      if (!statement || getStatementLifecycle(statement) !== "confirmed") return currentStore;
+      const nextStatement: MonthlyStatement = {
+        ...statement,
+        lifecycle: "draft",
+        confirmedAt: undefined,
+        confirmedBy: undefined,
+        confirmationMethod: undefined,
+        confirmationNote: undefined,
+        lastModifiedAt: today,
+        lastModifiedBy: currentUserLabel,
+        updatedAt: today,
+      };
+      return {
+        ...currentStore,
+        monthlyStatements: currentStore.monthlyStatements.map((item) => (item.id === statementId ? nextStatement : item)),
+        statementConfirmationHistories: appendStatementHistory(currentStore, nextStatement, "unconfirm", "confirmed", "draft", {
+          note: reason,
+        }),
+      };
+    });
+  }
+
+  function lockStatement(statementId: string) {
+    const today = getTodayString();
+    updateStore((currentStore) => {
+      const statement = currentStore.monthlyStatements.find((item) => item.id === statementId);
+      if (!statement || getStatementLifecycle(statement) !== "confirmed") return currentStore;
+      const nextStatement: MonthlyStatement = {
+        ...statement,
+        lifecycle: "locked",
+        lockedAt: today,
+        lockedBy: currentUserLabel,
+        lastModifiedAt: today,
+        lastModifiedBy: currentUserLabel,
+        updatedAt: today,
+      };
+      return {
+        ...currentStore,
+        monthlyStatements: currentStore.monthlyStatements.map((item) => (item.id === statementId ? nextStatement : item)),
+        statementConfirmationHistories: appendStatementHistory(currentStore, nextStatement, "lock", "confirmed", "locked"),
+      };
+    });
   }
 
   function upsertStatementItem(values: {
@@ -629,6 +795,10 @@ export function ReconciliationApp() {
     receivableAmount: number;
     note: string;
   }, itemId?: string) {
+    if (isStatementLockedById(values.statementId)) {
+      window.alert("该月度对账单已锁账，款号应收不能修改。如需调整请先解锁（反确认）。");
+      return;
+    }
     const today = getTodayString();
     if (itemId) {
       updateStore((currentStore) => {
@@ -696,6 +866,12 @@ export function ReconciliationApp() {
 
   function confirmDeleteStatementItem() {
     if (!pendingStatementItemDeleteId) return;
+    const item = store.statementItems.find((entry) => entry.id === pendingStatementItemDeleteId);
+    if (item && isStatementLockedById(item.statementId)) {
+      window.alert("该月度对账单已锁账，款号应收不能删除。");
+      setPendingStatementItemDeleteId(undefined);
+      return;
+    }
     updateStore((currentStore) => ({
       ...currentStore,
       statementItems: currentStore.statementItems.filter((item) => item.id !== pendingStatementItemDeleteId),
@@ -705,6 +881,10 @@ export function ReconciliationApp() {
   }
 
   function upsertStatementAdjustment(adjustment: StatementAdjustment) {
+    if (isStatementLockedById(adjustment.statementId)) {
+      window.alert("该月度对账单已锁账，扣款调整不能修改。如需调整请先解锁（反确认）。");
+      return;
+    }
     updateStore((currentStore) => {
       const exists = (currentStore.statementAdjustments ?? []).some((item) => item.id === adjustment.id);
       return {
@@ -722,6 +902,12 @@ export function ReconciliationApp() {
 
   function confirmDeleteStatementAdjustment() {
     if (!pendingAdjustmentDeleteId) return;
+    const adjustment = (store.statementAdjustments ?? []).find((entry) => entry.id === pendingAdjustmentDeleteId);
+    if (adjustment && isStatementLockedById(adjustment.statementId)) {
+      window.alert("该月度对账单已锁账，扣款调整不能删除。");
+      setPendingAdjustmentDeleteId(undefined);
+      return;
+    }
     updateStore((currentStore) => ({
       ...currentStore,
       statementAdjustments: (currentStore.statementAdjustments ?? []).filter((item) => item.id !== pendingAdjustmentDeleteId),
@@ -1302,7 +1488,16 @@ export function ReconciliationApp() {
             onExport={exportCurrentStatementWord}
             onPreview={() => selectedStatementSummary && setModal({ type: "statementPreview" })}
             onSaveAdjustment={upsertStatementAdjustment}
-            onStatementStatusChange={(status) => selectedStatement && updateStatementStatus(selectedStatement.id, status)}
+            onStatementSend={sendStatement}
+            onStatementWithdraw={withdrawStatement}
+            onStatementConfirm={(statementId) => setModal({ type: "statementConfirm", statementId })}
+            onStatementUnconfirm={(statementId) => setModal({ type: "statementUnconfirm", statementId })}
+            onStatementLock={(statementId) => {
+              if (window.confirm("锁账后，该月度对账单的款号应收、扣款调整等核心金额原则上不能直接修改。确认继续锁账？")) {
+                lockStatement(statementId);
+              }
+            }}
+            onStatementShowHistory={(statementId) => setModal({ type: "statementHistory", statementId })}
             onFiltersChange={(nextFilters) => {
               setDraftFilters(nextFilters);
               setFilters(nextFilters);
@@ -1383,6 +1578,9 @@ export function ReconciliationApp() {
         <StatementModal
           customers={activeCustomers}
           defaultCustomerId={modal.customerId || selectedCustomerId}
+          getDueDateSuggestion={(customerId, periodMonth) =>
+            suggestDueDate(periodMonth, getCustomerProfile(customerId, store)?.paymentTermDays)
+          }
           getOpeningBalance={(customerId, periodMonth) => getDefaultOpeningBalance(customerId, periodMonth, store)}
           onClose={() => setModal(null)}
           onSubmit={(values) => {
@@ -1474,6 +1672,30 @@ export function ReconciliationApp() {
           statementSummary={selectedStatementSummary}
         />
       )}
+      {modal?.type === "statementConfirm" && (
+        <StatementConfirmModal
+          onClose={() => setModal(null)}
+          onSubmit={(values) => {
+            confirmStatement(modal.statementId, values);
+            setModal(null);
+          }}
+        />
+      )}
+      {modal?.type === "statementUnconfirm" && (
+        <StatementUnconfirmModal
+          onClose={() => setModal(null)}
+          onSubmit={(reason) => {
+            unconfirmStatement(modal.statementId, reason);
+            setModal(null);
+          }}
+        />
+      )}
+      {modal?.type === "statementHistory" && (
+        <StatementHistoryModal
+          histories={(store.statementConfirmationHistories ?? []).filter((history) => history.statementId === modal.statementId)}
+          onClose={() => setModal(null)}
+        />
+      )}
       {pendingStatementItemDeleteId && (
         <ConfirmationDialog
           confirmLabel="确认删除"
@@ -1527,7 +1749,12 @@ function CustomerStatementPanel(props: {
   onExport(): void;
   onPreview(): void;
   onSaveAdjustment(adjustment: StatementAdjustment): void;
-  onStatementStatusChange(status: StatementStatus): void;
+  onStatementSend(statementId: string): void;
+  onStatementWithdraw(statementId: string): void;
+  onStatementConfirm(statementId: string): void;
+  onStatementUnconfirm(statementId: string): void;
+  onStatementLock(statementId: string): void;
+  onStatementShowHistory(statementId: string): void;
   onFiltersChange(filters: Filters): void;
   onPeriodChange(period: string): void;
   onResetFilters(): void;
@@ -1683,16 +1910,54 @@ function CustomerStatementPanel(props: {
                   <Eye size={16} />
                   预览对账单
                 </button>
-                {props.statement && (
-                  <label className="recon-statement-status-select">
-                    <AnimatedSelect
-                      ariaLabel="月度对账单状态"
-                      onChange={(value) => props.onStatementStatusChange(value as StatementStatus)}
-                      options={toSelectOptions(statementStatusOptions)}
-                      value={props.statement.status}
-                    />
-                  </label>
-                )}
+                {props.statement && (() => {
+                  const lifecycle = getStatementLifecycle(props.statement);
+                  const statementId = props.statement.id;
+                  return (
+                    <div className="recon-statement-lifecycle">
+                      <span className={`lifecycle-badge lifecycle-${lifecycle}`}>{statementLifecycleLabels[lifecycle]}</span>
+                      <span className="lifecycle-version">V{getStatementVersion(props.statement)}</span>
+                      {lifecycle === "draft" && (
+                        <button className="recon-button recon-button-light" onClick={() => props.onStatementSend(statementId)} type="button">
+                          标记已发送
+                        </button>
+                      )}
+                      {lifecycle === "sent" && (
+                        <>
+                          <button className="recon-button recon-button-light" onClick={() => props.onStatementWithdraw(statementId)} type="button">
+                            撤回至草稿
+                          </button>
+                          <button className="recon-button recon-button-primary" onClick={() => props.onStatementConfirm(statementId)} type="button">
+                            确认客户已确认
+                          </button>
+                        </>
+                      )}
+                      {lifecycle === "confirmed" && (
+                        <>
+                          <button className="recon-button recon-button-primary" onClick={() => props.onStatementLock(statementId)} type="button">
+                            锁账
+                          </button>
+                          <button className="recon-button recon-button-light" onClick={() => props.onStatementUnconfirm(statementId)} type="button">
+                            反确认
+                          </button>
+                          <button className="recon-button recon-button-light" onClick={() => props.onStatementShowHistory(statementId)} type="button">
+                            确认信息
+                          </button>
+                        </>
+                      )}
+                      {lifecycle === "locked" && (
+                        <>
+                          <span className="lifecycle-locked-info">
+                            {props.statement.lockedAt ?? ""} {props.statement.lockedBy ?? ""} 锁账
+                          </span>
+                          <button className="recon-button recon-button-light" onClick={() => props.onStatementShowHistory(statementId)} type="button">
+                            查看确认信息
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
               <div className="recon-statement-actions-right">
                 <button className="recon-button recon-button-light" onClick={props.onOpenReceiptPool} type="button">
@@ -1703,7 +1968,13 @@ function CustomerStatementPanel(props: {
                   <ReceiptText size={16} />
                   开票池
                 </button>
-                <button className="recon-button recon-button-primary recon-statement-add-item" disabled={!props.statement} onClick={props.onAddItem} type="button">
+                <button
+                  className="recon-button recon-button-primary recon-statement-add-item"
+                  disabled={!props.statement || (!!props.statement && getStatementLifecycle(props.statement) === "locked")}
+                  onClick={props.onAddItem}
+                  title={props.statement && getStatementLifecycle(props.statement) === "locked" ? "已锁账，不能修改款号应收" : undefined}
+                  type="button"
+                >
                   <Plus size={16} />
                   新增款号应收
                 </button>
@@ -1770,10 +2041,20 @@ function CustomerStatementPanel(props: {
                             <button onClick={() => props.onSelectItem(itemSummary.item.id)} title="查看" type="button">
                               <Eye size={15} />
                             </button>
-                            <button onClick={() => props.onEditItem(itemSummary.item)} title="编辑" type="button">
+                            <button
+                              disabled={props.statement ? getStatementLifecycle(props.statement) === "locked" : false}
+                              onClick={() => props.onEditItem(itemSummary.item)}
+                              title={props.statement && getStatementLifecycle(props.statement) === "locked" ? "已锁账，不能编辑" : "编辑"}
+                              type="button"
+                            >
                               <Pencil size={15} />
                             </button>
-                            <button onClick={() => props.onDeleteItem(itemSummary.item.id)} title="删除" type="button">
+                            <button
+                              disabled={props.statement ? getStatementLifecycle(props.statement) === "locked" : false}
+                              onClick={() => props.onDeleteItem(itemSummary.item.id)}
+                              title={props.statement && getStatementLifecycle(props.statement) === "locked" ? "已锁账，不能删除" : "删除"}
+                              type="button"
+                            >
                               <Trash2 size={15} />
                             </button>
                           </div>
@@ -1814,6 +2095,7 @@ function CustomerStatementPanel(props: {
               receipts={props.receipts}
               statement={props.statement}
               statementId={props.statement.id}
+              statementLocked={getStatementLifecycle(props.statement) === "locked"}
               statementItems={props.selectedStatementSummary!.items}
             />
           ) : (
@@ -1841,6 +2123,7 @@ function StatementDetail(props: {
   receipts: CustomerReceipt[];
   statement: MonthlyStatement;
   statementId: string;
+  statementLocked: boolean;
   statementItems: ReturnType<typeof summarizeStatement>["items"];
 }) {
   const statementAllocations = props.allocations.filter((allocation) => allocation.statementId === props.statementId);
@@ -1868,7 +2151,7 @@ function StatementDetail(props: {
             ["receivable", "明细"],
             ["adjustment", "扣款调整"],
             ["invoice", "开票记录"],
-            ["payment", "收款分配"],
+            ["payment", "收款核销"],
           ].map(([id, label]) => (
             <button className={props.detailTab === id ? "is-active" : ""} key={id} onClick={() => props.onSetDetailTab(id as DetailTab)} type="button">
               {label}
@@ -1877,7 +2160,13 @@ function StatementDetail(props: {
         </div>
         <div className="recon-detail-toolbar-actions">
           {props.detailTab === "adjustment" && (
-            <button className="recon-button recon-button-warning" onClick={() => setIsAdjustmentModalOpen(true)} type="button">
+            <button
+              className="recon-button recon-button-warning"
+              disabled={props.statementLocked}
+              onClick={() => setIsAdjustmentModalOpen(true)}
+              title={props.statementLocked ? "已锁账，不能新增扣款调整" : undefined}
+              type="button"
+            >
               <Plus size={16} />
               新增扣款
             </button>
@@ -4654,12 +4943,130 @@ function CustomerModal(props: {
   );
 }
 
+function StatementConfirmModal(props: {
+  onClose(): void;
+  onSubmit(values: { confirmedAt: string; confirmationMethod: import("./models").ConfirmationMethod; confirmedBy: string; confirmationNote: string }): void;
+}) {
+  const [confirmedAt, setConfirmedAt] = useState(getTodayString());
+  const [confirmationMethod, setConfirmationMethod] = useState<import("./models").ConfirmationMethod>("微信确认");
+  const [confirmedBy, setConfirmedBy] = useState("");
+  const [confirmationNote, setConfirmationNote] = useState("");
+
+  return (
+    <Modal onClose={props.onClose} title="确认客户对账">
+      <form
+        className="recon-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!confirmedAt) return;
+          props.onSubmit({ confirmedAt, confirmationMethod, confirmedBy: confirmedBy.trim(), confirmationNote: confirmationNote.trim() });
+        }}
+      >
+        <Field label="确认日期" required>
+          <input onChange={(event) => setConfirmedAt(event.target.value)} type="date" value={confirmedAt} />
+        </Field>
+        <Field label="确认方式" required>
+          <AnimatedSelect
+            ariaLabel="确认方式"
+            onChange={(value) => setConfirmationMethod(value as import("./models").ConfirmationMethod)}
+            options={toSelectOptions(confirmationMethodOptions)}
+            value={confirmationMethod}
+          />
+        </Field>
+        <Field label="确认人">
+          <input onChange={(event) => setConfirmedBy(event.target.value)} placeholder="例如：张三 / 客户财务" value={confirmedBy} />
+        </Field>
+        <Field label="确认备注">
+          <textarea onChange={(event) => setConfirmationNote(event.target.value)} placeholder="客户确认过程中的补充说明" value={confirmationNote} />
+        </Field>
+        <ModalActions onClose={props.onClose} submitLabel="确认" />
+      </form>
+    </Modal>
+  );
+}
+
+function StatementUnconfirmModal(props: {
+  onClose(): void;
+  onSubmit(reason: string): void;
+}) {
+  const [reason, setReason] = useState("");
+
+  return (
+    <Modal onClose={props.onClose} title="反确认">
+      <form
+        className="recon-form"
+        onSubmit={(event) => {
+          event.preventDefault();
+          if (!reason.trim()) return;
+          props.onSubmit(reason.trim());
+        }}
+      >
+        <Field label="反确认原因" required>
+          <textarea
+            onChange={(event) => setReason(event.target.value)}
+            placeholder="例如：客户提出金额异议"
+            value={reason}
+          />
+        </Field>
+        <p className="recon-form-hint">反确认后月度对账单回到草稿状态，原确认记录会保留在确认信息中，可继续修改后再次确认（版本号 +1）。</p>
+        <ModalActions onClose={props.onClose} submitLabel="确认反确认" />
+      </form>
+    </Modal>
+  );
+}
+
+function StatementHistoryModal(props: { histories: StatementConfirmationHistory[]; onClose(): void }) {
+  const sorted = [...props.histories].reverse();
+  return (
+    <Modal onClose={props.onClose} size="receiptPool" title="确认信息 / 历史记录">
+      {sorted.length === 0 ? (
+        <EmptyPanel text="该月度对账单还没有确认相关记录。" />
+      ) : (
+        <div className="recon-table-wrap">
+          <table className="recon-table">
+            <thead>
+              <tr>
+                <th>时间</th>
+                <th>操作</th>
+                <th>版本</th>
+                <th>状态流转</th>
+                <th>当时未收金额</th>
+                <th>操作人</th>
+                <th>方式 / 原因</th>
+              </tr>
+            </thead>
+            <tbody>
+              {sorted.map((history) => (
+                <tr key={history.id}>
+                  <td>{history.occurredAt}</td>
+                  <td>{statementHistoryActionLabels[history.action] ?? history.action}</td>
+                  <td>V{history.version}</td>
+                  <td>
+                    {statementLifecycleLabels[history.statusBefore]} → {statementLifecycleLabels[history.statusAfter]}
+                  </td>
+                  <td>¥ {formatMoney(history.confirmedAmount)}</td>
+                  <td>{history.operatorName}</td>
+                  <td>
+                    {history.method ? `${history.method} ` : ""}
+                    {history.note || "-"}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </Modal>
+  );
+}
+
 function StatementModal(props: {
   customers: Customer[];
   defaultCustomerId: string;
+  getDueDateSuggestion(customerId: string, periodMonth: string): string;
   getOpeningBalance(customerId: string, periodMonth: string): number;
   onClose(): void;
-  onSubmit(values: { customerId: string; periodMonth: string; openingBalance: number; note: string }): void;
+  onSubmit(values: { customerId: string; periodMonth: string; openingBalance: number; dueDate: string; note: string }): void;
 }) {
   const initialCustomerId = props.customers.some((customer) => customer.id === props.defaultCustomerId)
     ? props.defaultCustomerId
@@ -4667,12 +5074,14 @@ function StatementModal(props: {
   const [customerId, setCustomerId] = useState(initialCustomerId);
   const [periodMonth, setPeriodMonth] = useState(getCurrentPeriod());
   const [openingBalance, setOpeningBalance] = useState(() => String(props.getOpeningBalance(initialCustomerId, getCurrentPeriod())));
+  const [dueDate, setDueDate] = useState(() => props.getDueDateSuggestion(initialCustomerId, getCurrentPeriod()));
   const [note, setNote] = useState("");
 
   function updatePeriod(nextCustomerId: string, nextPeriodMonth: string) {
     setCustomerId(nextCustomerId);
     setPeriodMonth(nextPeriodMonth);
     setOpeningBalance(String(props.getOpeningBalance(nextCustomerId, nextPeriodMonth)));
+    setDueDate(props.getDueDateSuggestion(nextCustomerId, nextPeriodMonth));
   }
 
   return (
@@ -4686,6 +5095,7 @@ function StatementModal(props: {
             customerId,
             periodMonth,
             openingBalance: parseMoney(openingBalance),
+            dueDate: dueDate.trim(),
             note: note.trim(),
           });
         }}
@@ -4703,6 +5113,9 @@ function StatementModal(props: {
         </Field>
         <Field label="期初余额">
           <input min="0" onChange={(event) => setOpeningBalance(event.target.value)} step="0.01" type="number" value={openingBalance} />
+        </Field>
+        <Field label="到期日">
+          <input onChange={(event) => setDueDate(event.target.value)} title="按客户账期自动推荐，可手工修改" type="date" value={dueDate} />
         </Field>
         <Field label="备注">
           <textarea onChange={(event) => setNote(event.target.value)} placeholder="例如：自动结转上月余额" value={note} />

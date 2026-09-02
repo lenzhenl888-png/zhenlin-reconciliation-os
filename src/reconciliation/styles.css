@@ -719,6 +719,66 @@
   font-style: normal;
 }
 
+.recon-statement-lifecycle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.lifecycle-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.lifecycle-badge.lifecycle-draft {
+  border: 1px solid #cfd7e3;
+  background: #f1f5f9;
+  color: #546275;
+}
+
+.lifecycle-badge.lifecycle-sent {
+  border: 1px solid #93c5fd;
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+
+.lifecycle-badge.lifecycle-confirmed {
+  border: 1px solid #86efac;
+  background: #dcfce7;
+  color: #15803d;
+}
+
+.lifecycle-badge.lifecycle-locked {
+  border: 1px solid #fcd34d;
+  background: #fef3c7;
+  color: #b45309;
+}
+
+.lifecycle-version {
+  color: #8d9bab;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.lifecycle-locked-info {
+  color: #b45309;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.recon-form-hint {
+  margin: 0;
+  color: #6f7f93;
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .recon-field small {
   color: #6f7f93;
   font-size: 12px;
