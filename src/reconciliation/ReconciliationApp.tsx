@@ -6229,12 +6229,6 @@ function ReceiptPoolModal(props: {
     setRows((currentRows) => currentRows.map((row) => (row.id === rowId ? { ...row, ...patch } : row)));
   }
 
-  function deleteRow(row: ReceiptPoolRow) {
-    if (row.isLocked) return;
-    const allocatedAmount = getReceiptAllocatedAmount(row.id, props.allocations);
-    setPendingConfirmation({ allocatedAmount, rowId: row.id, type: "delete" });
-  }
-
   function toggleRowLock(row: ReceiptPoolRow) {
     if (row.isLocked) {
       setPendingConfirmation({ rowId: row.id, type: "unlock" });
@@ -6253,11 +6247,6 @@ function ReceiptPoolModal(props: {
 
     if (pendingConfirmation.type === "unlock") {
       updateRow(row.id, { isLocked: false });
-    } else if (!row.isLocked) {
-      setRows((currentRows) => currentRows.filter((item) => item.id !== row.id));
-      if (!row.isNew) {
-        setDeletedReceiptIds((currentIds) => [...currentIds, row.id]);
-      }
     }
     setPendingConfirmation(undefined);
   }
@@ -6394,16 +6383,6 @@ function ReceiptPoolModal(props: {
                           <Network size={16} />
                         </button>
                         <button
-                          aria-label="删除收款"
-                          className="receipt-pool-icon-action is-delete"
-                          disabled={row.isLocked}
-                          onClick={() => deleteRow(row)}
-                          title={row.isLocked ? "该收款已锁定" : "删除收款"}
-                          type="button"
-                        >
-                          <Trash2 size={16} />
-                        </button>
-                        <button
                           aria-label={row.isLocked ? "解锁收款" : "锁定收款"}
                           aria-pressed={row.isLocked}
                           className={`receipt-pool-icon-action ${row.isLocked ? "is-lock-closed" : "is-lock-open"}`}
@@ -6480,18 +6459,12 @@ function ReceiptPoolModal(props: {
       })()}
       {pendingConfirmation && (
         <ConfirmationDialog
-          confirmLabel={pendingConfirmation.type === "delete" ? "确认删除" : "确认解锁"}
-          description={
-            pendingConfirmation.type === "delete"
-              ? pendingConfirmation.allocatedAmount && pendingConfirmation.allocatedAmount > 0
-                ? "该收款已有分配记录，删除后会影响对账单和款号的收款结果。此操作将在保存收款池后生效。"
-                : "删除后将无法在收款池中找到这笔记录。此操作将在保存收款池后生效。"
-              : "解锁后，这笔收款可以继续修改或删除。"
-          }
+          confirmLabel="确认解锁"
+          description="解锁后，这笔收款可以继续修改。如需删除请前往财务明细。"
           onCancel={() => setPendingConfirmation(undefined)}
           onConfirm={confirmPendingAction}
-          title={pendingConfirmation.type === "delete" ? "确认删除这笔收款？" : "确认解锁这笔收款？"}
-          tone={pendingConfirmation.type === "delete" ? "danger" : "primary"}
+          title="确认解锁这笔收款？"
+          tone="primary"
         />
       )}
     </>
@@ -6552,11 +6525,6 @@ function InvoicePoolModal(props: {
     setRows((currentRows) => currentRows.map((row) => (row.id === rowId ? { ...row, ...patch } : row)));
   }
 
-  function deleteRow(row: InvoicePoolRow) {
-    if (row.isLocked) return;
-    setPendingConfirmation({ allocatedAmount: getInvoiceAllocatedAmount(row.id, props.allocations), rowId: row.id, type: "delete" });
-  }
-
   function toggleRowLock(row: InvoicePoolRow) {
     if (row.isLocked) {
       setPendingConfirmation({ rowId: row.id, type: "unlock" });
@@ -6574,9 +6542,6 @@ function InvoicePoolModal(props: {
     }
     if (pendingConfirmation.type === "unlock") {
       updateRow(row.id, { isLocked: false });
-    } else if (!row.isLocked) {
-      setRows((currentRows) => currentRows.filter((item) => item.id !== row.id));
-      if (!row.isNew) setDeletedInvoiceIds((currentIds) => [...currentIds, row.id]);
     }
     setPendingConfirmation(undefined);
   }
@@ -6654,7 +6619,6 @@ function InvoicePoolModal(props: {
                       <td>
                         <div className="receipt-pool-actions">
                           <button aria-label="分配开票" className="receipt-pool-icon-action is-allocate" disabled={row.isLocked || row.isNew || amount <= allocatedAmount} onClick={() => setAllocationInvoiceId(row.id)} title={row.isNew ? "请先保存开票后再分配" : row.isLocked ? "该开票已锁定" : "开票分配"} type="button"><Network size={16} /></button>
-                          <button aria-label="删除开票" className="receipt-pool-icon-action is-delete" disabled={row.isLocked} onClick={() => deleteRow(row)} title={row.isLocked ? "该开票已锁定" : "删除开票"} type="button"><Trash2 size={16} /></button>
                           <button aria-label={row.isLocked ? "解锁开票" : "锁定开票"} aria-pressed={row.isLocked} className={`receipt-pool-icon-action ${row.isLocked ? "is-lock-closed" : "is-lock-open"}`} onClick={() => toggleRowLock(row)} title={row.isLocked ? "解锁开票" : "锁定开票"} type="button">{row.isLocked ? <Lock size={16} /> : <LockOpen size={16} />}</button>
                         </div>
                       </td>
@@ -6699,12 +6663,12 @@ function InvoicePoolModal(props: {
       )}
       {pendingConfirmation && (
         <ConfirmationDialog
-          confirmLabel={pendingConfirmation.type === "delete" ? "确认删除" : "确认解锁"}
-          description={pendingConfirmation.type === "delete" ? pendingConfirmation.allocatedAmount && pendingConfirmation.allocatedAmount > 0 ? "该开票已有分配记录，删除后会影响对账单和款号的开票结果。此操作将在保存开票池后生效。" : "删除后将无法在开票池中找到这笔开票。此操作将在保存开票池后生效。" : "解锁后，这笔开票可以继续修改或删除。"}
+          confirmLabel="确认解锁"
+          description="解锁后，这笔开票可以继续修改。如需删除请前往财务明细。"
           onCancel={() => setPendingConfirmation(undefined)}
           onConfirm={confirmPendingAction}
-          title={pendingConfirmation.type === "delete" ? "确认删除这笔开票？" : "确认解锁这笔开票？"}
-          tone={pendingConfirmation.type === "delete" ? "danger" : "primary"}
+          title="确认解锁这笔开票？"
+          tone="primary"
         />
       )}
     </>
