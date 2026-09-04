@@ -6784,182 +6784,111 @@ function SettlementModal(props: {
   const settlement = getReceiptSettlementInfo(props.receipt, props.allocations);
   const targetStatement = props.store.monthlyStatements.find((statement) => statement.id === props.targetStatementId);
   const targetSummary = targetStatement ? summarizeStatement(targetStatement, props.store) : null;
-  const [amountInputs, setAmountInputs] = useState<Record<string, string>>({});
+  const rows = (targetSummary?.items ?? [])
+    .map((item) => ({
+      styleAccountId: item.item.styleAccountId,
+      styleNo: item.styleAccount?.styleNo ?? "-",
+      unpaidAmount: item.unpaidAmount,
+    }))
+    .filter((row) => row.unpaidAmount > 0);
+  const [styleAccountId, setStyleAccountId] = useState(rows[0]?.styleAccountId ?? "");
+  const [amount, setAmount] = useState("");
+  const [note, setNote] = useState("");
   const [error, setError] = useState("");
 
-  const rows = (targetSummary?.items ?? []).map((item) => ({
-    styleAccountId: item.item.styleAccountId,
-    styleNo: item.styleAccount?.styleNo ?? "-",
-    receivableAmount: item.receivableAmount,
-    adjustmentNetAmount: item.adjustmentNetAmount,
-    paidAmount: item.paidAmount,
-    unpaidAmount: item.unpaidAmount,
-  }));
-  const openRows = rows.filter((row) => row.unpaidAmount > 0);
-
-  const pendingTotal = sumMoney(Object.values(amountInputs).map((value) => parseMoney(value)));
-  const remaining = roundMoney(settlement.unallocatedAmount - pendingTotal);
-
-  function setRowAmount(styleAccountId: string, value: string) {
-    setAmountInputs((current) => ({ ...current, [styleAccountId]: value }));
-    setError("");
-  }
-
-  function autoAllocate() {
-    let pool = settlement.unallocatedAmount;
-    const nextInputs: Record<string, string> = {};
-    for (const row of openRows) {
-      if (pool <= 0) break;
-      const target = Math.min(pool, row.unpaidAmount);
-      if (target > 0) {
-        nextInputs[row.styleAccountId] = target.toFixed(2);
-        pool = roundMoney(pool - target);
-      }
-    }
-    setAmountInputs(nextInputs);
-    setError("");
-  }
+  const selectedRow = rows.find((row) => row.styleAccountId === styleAccountId) ?? rows[0];
+  const maxAmount = roundMoney(Math.min(settlement.unallocatedAmount, selectedRow?.unpaidAmount ?? 0));
 
   function submit() {
     if (!targetStatement) {
       setError("当前月份没有月度对账单，无法核销。");
       return;
     }
-    const rowsToSave = rows
-      .map((row) => ({ ...row, amount: parseMoney(amountInputs[row.styleAccountId] ?? "0") }))
-      .filter((row) => row.amount > 0);
-    if (rowsToSave.length === 0) {
-      setError("请至少为一个款号填写核销金额。");
+    if (!selectedRow) {
+      setError("当前月份没有未收的款号，这笔收款将保留在未核销收款中。");
       return;
     }
-    if (pendingTotal > settlement.unallocatedAmount + 0.001) {
-      setError("核销金额合计不能超过剩余可核销金额。");
+    const parsedAmount = parseMoney(amount);
+    if (parsedAmount <= 0) {
+      setError("核销金额必须大于 0。");
       return;
     }
-    const overAllocated = rowsToSave.find((row) => row.amount > row.unpaidAmount + 0.001);
-    if (overAllocated) {
-      setError(`款号 ${overAllocated.styleNo} 的核销金额不能超过未收金额 ¥ ${formatMoney(overAllocated.unpaidAmount)}。`);
+    if (parsedAmount > settlement.unallocatedAmount + 0.001) {
+      setError(`核销金额不能超过这笔收款的未核销金额 ¥ ${formatMoney(settlement.unallocatedAmount)}。`);
       return;
     }
-    const today = getTodayString();
-    props.onSubmitAllocation(
-      rowsToSave.map((row) => ({
-        id: createId("alloc"),
-        receiptId: props.receipt.id,
-        customerId: props.receipt.customerId,
-        statementId: targetStatement.id,
-        styleAccountId: row.styleAccountId,
-        allocatedAmount: row.amount,
-        allocationDate: today,
-        note: "收款核销",
-      })),
-    );
+    if (parsedAmount > selectedRow.unpaidAmount + 0.001) {
+      setError(`款号 ${selectedRow.styleNo} 的核销金额不能超过未收金额 ¥ ${formatMoney(selectedRow.unpaidAmount)}。`);
+      return;
+    }
+    props.onSubmitAllocation({
+      id: createId("alloc"),
+      receiptId: props.receipt.id,
+      customerId: props.receipt.customerId,
+      statementId: targetStatement.id,
+      styleAccountId: selectedRow.styleAccountId,
+      allocatedAmount: parsedAmount,
+      allocationDate: getTodayString(),
+      note: note.trim() || "收款核销",
+    });
   }
 
   return (
-    <Modal onClose={props.onClose} size="receiptPool" title="收款核销">
-      <div className="settlement-modal-body">
-        <div className="settlement-summary">
-          <div>
-            <span>本笔收款</span>
-            <strong>¥ {formatMoney(props.receipt.amount)}</strong>
-          </div>
-          <div>
-            <span>已核销</span>
-            <strong>¥ {formatMoney(settlement.allocatedAmount)}</strong>
-          </div>
-          <div>
-            <span>剩余可核销</span>
-            <strong>¥ {formatMoney(settlement.unallocatedAmount)}</strong>
-          </div>
-          <div>
-            <span>本次已填</span>
-            <strong className={remaining < 0 ? "is-danger" : ""}>¥ {formatMoney(pendingTotal)}</strong>
-          </div>
-          <div>
-            <span>客户</span>
-            <strong>{props.customer?.name ?? "-"}</strong>
-          </div>
-          <div>
-            <span>收款日期</span>
-            <strong>{props.receipt.receiptDate}</strong>
-          </div>
+    <Modal onClose={props.onClose} title="收款核销">
+      <form className="recon-form" onSubmit={submit}>
+        <div className="settlement-summary-line">
+          <span>客户：<strong>{props.customer?.name ?? "-"}</strong></span>
+          <span>收款日期：<strong>{props.receipt.receiptDate}</strong></span>
+          <span>本笔收款：<strong>¥ {formatMoney(props.receipt.amount)}</strong></span>
+          <span>已核销：<strong>¥ {formatMoney(settlement.allocatedAmount)}</strong></span>
+          <span>剩余可核销：<strong>¥ {formatMoney(settlement.unallocatedAmount)}</strong></span>
         </div>
-        <p className="settlement-target-line">
-          核销到：<strong>{targetStatement ? `${targetStatement.periodMonth} 月度对账单的款号` : "未找到月度对账单"}</strong>
-          （如需核销到其他月份，请先用顶部月历切换月份）
-        </p>
-        <div className="recon-table-wrap">
-          <table className="recon-table recon-table-stable">
-            <colgroup>
-              <col style={{ width: "16%" }} />
-              <col style={{ width: "15%" }} />
-              <col style={{ width: "12%" }} />
-              <col style={{ width: "15%" }} />
-              <col style={{ width: "15%" }} />
-              <col style={{ width: "27%" }} />
-            </colgroup>
-            <thead>
-              <tr>
-                <th>款号</th>
-                <th>应收金额</th>
-                <th>调整</th>
-                <th>已核销</th>
-                <th>未收</th>
-                <th>本次核销金额</th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.length === 0 ? (
-                <tr>
-                  <td colSpan={6}>当前月份还没有款号应收，请先在月度对账单中新增款号，再进行核销。</td>
-                </tr>
-              ) : openRows.length === 0 ? (
-                <tr>
-                  <td colSpan={6}>本月所有款号均已结清，这笔收款将保留在未核销收款中。</td>
-                </tr>
-              ) : (
-                openRows.map((row) => (
-                  <tr key={row.styleAccountId}>
-                    <td>{row.styleNo}</td>
-                    <td>¥ {formatMoney(row.receivableAmount)}</td>
-                    <td className={row.adjustmentNetAmount < 0 ? "is-danger" : ""}>
-                      {row.adjustmentNetAmount === 0
-                        ? "¥ 0.00"
-                        : `${row.adjustmentNetAmount > 0 ? "+" : "-"}¥ ${formatMoney(Math.abs(row.adjustmentNetAmount))}`}
-                    </td>
-                    <td>¥ {formatMoney(row.paidAmount)}</td>
-                    <td className="is-danger">¥ {formatMoney(row.unpaidAmount)}</td>
-                    <td>
-                      <input
-                        max={row.unpaidAmount}
-                        min="0"
-                        onChange={(event) => setRowAmount(row.styleAccountId, event.target.value)}
-                        placeholder="0.00"
-                        step="0.01"
-                        type="number"
-                        value={amountInputs[row.styleAccountId] ?? ""}
-                      />
-                    </td>
-                  </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+        <div className="recon-static-field">
+          <span>核销到</span>
+          <strong>{targetStatement ? `${targetStatement.periodMonth} 月度对账单` : "未找到月度对账单"}</strong>
         </div>
+        <Field label="分配到款号" required>
+          <AnimatedSelect
+            ariaLabel="分配到款号"
+            onChange={setStyleAccountId}
+            options={rows.map((row) => ({ label: `${row.styleNo}（未收 ¥ ${formatMoney(row.unpaidAmount)}）`, value: row.styleAccountId }))}
+            value={selectedRow?.styleAccountId ?? ""}
+          />
+        </Field>
+        <Field label="核销金额" required>
+          <span className="allocation-amount-row">
+            <input
+              max={maxAmount}
+              min="0"
+              onChange={(event) => {
+                setAmount(event.target.value);
+                setError("");
+              }}
+              placeholder="0.00"
+              step="0.01"
+              type="number"
+              value={amount}
+            />
+            <button
+              className="recon-button recon-button-light"
+              disabled={!selectedRow || maxAmount <= 0}
+              onClick={() => {
+                setAmount(maxAmount > 0 ? maxAmount.toFixed(2) : "");
+                setError("");
+              }}
+              title="填入可核销的最大金额"
+              type="button"
+            >
+              一键最大
+            </button>
+          </span>
+        </Field>
+        <Field label="备注">
+          <textarea onChange={(event) => setNote(event.target.value)} value={note} />
+        </Field>
         {error && <div className="receipt-pool__error">{error}</div>}
-        <div className="recon-modal-actions">
-          <button className="recon-button recon-button-light" disabled={openRows.length === 0} onClick={autoAllocate} type="button">
-            自动分配（按款号顺序）
-          </button>
-          <button className="recon-button recon-button-light" onClick={props.onClose} type="button">
-            取消
-          </button>
-          <button className="recon-button recon-button-primary" disabled={openRows.length === 0} onClick={submit} type="button">
-            确认核销
-          </button>
-        </div>
-      </div>
+        <ModalActions onClose={props.onClose} submitLabel="确认核销" />
+      </form>
     </Modal>
   );
 }

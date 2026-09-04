@@ -888,6 +888,22 @@
   gap: 12px;
 }
 
+.settlement-summary-line {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  margin-bottom: 2px;
+  color: #546275;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.settlement-summary-line strong {
+  color: #172033;
+  font-size: 13px;
+  font-weight: 900;
+}
+
 .recon-static-field {
   display: flex;
   flex-direction: column;
