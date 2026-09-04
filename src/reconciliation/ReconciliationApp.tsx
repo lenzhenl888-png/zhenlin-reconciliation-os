@@ -1225,6 +1225,52 @@ export function ReconciliationApp() {
     }));
   }
 
+  function createCustomerReceipt(values: {
+    customerId: string;
+    receiptDate: string;
+    amount: number;
+    method: PaymentMethod;
+    transactionNo: string;
+    note: string;
+  }) {
+    const today = getTodayString();
+    const receipt: CustomerReceipt = {
+      id: createId("receipt"),
+      customerId: values.customerId,
+      receiptDate: values.receiptDate,
+      amount: roundMoney(values.amount),
+      method: values.method,
+      isLocked: false,
+      transactionNo: values.transactionNo,
+      note: values.note,
+      createdAt: today,
+      updatedAt: today,
+    };
+    updateStore((currentStore) => ({ ...currentStore, customerReceipts: [receipt, ...currentStore.customerReceipts] }));
+  }
+
+  function createCustomerInvoice(values: {
+    customerId: string;
+    invoiceDate: string;
+    invoiceNo: string;
+    amount: number;
+    note: string;
+  }) {
+    const today = getTodayString();
+    const invoice: CustomerInvoice = {
+      id: createId("invoice"),
+      customerId: values.customerId,
+      invoiceDate: values.invoiceDate,
+      invoiceNo: values.invoiceNo,
+      amount: roundMoney(values.amount),
+      isLocked: false,
+      note: values.note,
+      createdAt: today,
+      updatedAt: today,
+    };
+    updateStore((currentStore) => ({ ...currentStore, customerInvoices: [invoice, ...(currentStore.customerInvoices ?? [])] }));
+  }
+
   function updateReceipt(receipt: CustomerReceipt) {
     updateStore((currentStore) => ({
       ...currentStore,
@@ -1836,6 +1882,8 @@ export function ReconciliationApp() {
             allocations={store.receiptAllocations}
             customerProfiles={store.customerProfiles}
             customers={store.customers}
+            onCreateReceipt={createCustomerReceipt}
+            onCreateInvoice={createCustomerInvoice}
             onDeleteReceipt={deleteCustomerReceipt}
             onDeleteInvoice={deleteCustomerInvoice}
             onImportInvoices={importInvoices}
@@ -4587,6 +4635,109 @@ function FinancialInvoiceEditModal(props: {
   );
 }
 
+function FinancialRecordCreateModal(props: {
+  customerOptions: Array<{ label: string; value: string }>;
+  onClose(): void;
+  onCreateInvoice(values: { customerId: string; invoiceDate: string; invoiceNo: string; amount: number; note: string }): void;
+  onCreateReceipt(values: { customerId: string; receiptDate: string; amount: number; method: PaymentMethod; transactionNo: string; note: string }): void;
+}) {
+  const [recordType, setRecordType] = useState<"receipt" | "invoice">("receipt");
+  const [customerId, setCustomerId] = useState(props.customerOptions[0]?.value ?? "");
+  const [date, setDate] = useState(getTodayString());
+  const [amount, setAmount] = useState("");
+  const [method, setMethod] = useState<PaymentMethod>("银行转账");
+  const [documentNo, setDocumentNo] = useState("");
+  const [note, setNote] = useState("");
+  const [error, setError] = useState("");
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setError("");
+    if (!customerId) {
+      setError("请选择客户。");
+      return;
+    }
+    if (!date) {
+      setError("请选择日期。");
+      return;
+    }
+    const parsedAmount = parseMoney(amount);
+    if (parsedAmount <= 0) {
+      setError("金额必须大于 0。");
+      return;
+    }
+    if (recordType === "receipt") {
+      props.onCreateReceipt({
+        customerId,
+        receiptDate: date,
+        amount: parsedAmount,
+        method,
+        transactionNo: documentNo.trim(),
+        note: note.trim(),
+      });
+    } else {
+      props.onCreateInvoice({
+        customerId,
+        invoiceDate: date,
+        invoiceNo: documentNo.trim(),
+        amount: parsedAmount,
+        note: note.trim(),
+      });
+    }
+    props.onClose();
+  }
+
+  return (
+    <Modal onClose={props.onClose} title="新建收款 / 开票">
+      <form className="recon-form" onSubmit={submit}>
+        <Field label="类型" required>
+          <AnimatedSelect
+            ariaLabel="记录类型"
+            onChange={(value) => setRecordType(value as "receipt" | "invoice")}
+            options={[
+              { label: "收款", value: "receipt" },
+              { label: "开票（发票）", value: "invoice" },
+            ]}
+            value={recordType}
+          />
+        </Field>
+        <Field label="客户" required>
+          <AnimatedSelect
+            ariaLabel="客户"
+            onChange={setCustomerId}
+            options={props.customerOptions}
+            value={customerId}
+          />
+        </Field>
+        <Field label={recordType === "receipt" ? "收款日期" : "开票日期"} required>
+          <input onChange={(event) => setDate(event.target.value)} type="date" value={date} />
+        </Field>
+        <Field label={recordType === "receipt" ? "收款金额" : "开票金额"} required>
+          <input min="0" onChange={(event) => setAmount(event.target.value)} step="0.01" type="number" value={amount} />
+        </Field>
+        {recordType === "receipt" && (
+          <Field label="收款方式" required>
+            <AnimatedSelect
+              ariaLabel="收款方式"
+              onChange={(value) => setMethod(value as PaymentMethod)}
+              options={toSelectOptions(paymentMethods)}
+              value={method}
+            />
+          </Field>
+        )}
+        <Field label={recordType === "receipt" ? "流水号 / 承兑编号" : "发票号码"}>
+          <input onChange={(event) => setDocumentNo(event.target.value)} value={documentNo} />
+        </Field>
+        <Field label="备注">
+          <textarea onChange={(event) => setNote(event.target.value)} value={note} />
+        </Field>
+        {error && <div className="receipt-pool__error">{error}</div>}
+        <ModalActions onClose={props.onClose} submitLabel="保存" />
+      </form>
+    </Modal>
+  );
+}
+
 function SettingsModule(props: { auditLogs: AuditLog[] }) {
   const auth = useAuth();
   const [oldPassword, setOldPassword] = useState("");
@@ -4854,6 +5005,8 @@ function FinancialRecordsModule(props: {
   customers: Customer[];
   invoiceAllocations: InvoiceAllocation[];
   invoices: CustomerInvoice[];
+  onCreateReceipt(values: { customerId: string; receiptDate: string; amount: number; method: PaymentMethod; transactionNo: string; note: string }): void;
+  onCreateInvoice(values: { customerId: string; invoiceDate: string; invoiceNo: string; amount: number; note: string }): void;
   onDeleteInvoice(invoiceId: string): void;
   onDeleteReceipt(receiptId: string): void;
   onImportInvoices(rows: InvoiceImportRow[], warnings: string[]): void;
@@ -4876,6 +5029,7 @@ function FinancialRecordsModule(props: {
   );
   const [measuredFinancialColumnWidths, setMeasuredFinancialColumnWidths] = useState<number[] | null>(null);
   const [financialScrollLeft, setFinancialScrollLeft] = useState(0);
+  const [creatingRecord, setCreatingRecord] = useState(false);
   const [editingReceipt, setEditingReceipt] = useState<CustomerReceipt | null>(null);
   const [editingInvoice, setEditingInvoice] = useState<CustomerInvoice | null>(null);
   const [pendingDelete, setPendingDelete] = useState<FinancialGridRow | null>(null);
@@ -5118,6 +5272,10 @@ function FinancialRecordsModule(props: {
           <button className="recon-button recon-button-light" onClick={resetFilters} type="button">重置</button>
         </div>
         <div className="financial-import-actions">
+          <button className="recon-button recon-button-primary" onClick={() => setCreatingRecord(true)} type="button">
+            <Plus size={16} />
+            新建
+          </button>
           <label className="recon-button recon-button-primary payment-import-trigger">
             <Upload size={16} />
             导入收款
@@ -5256,6 +5414,14 @@ function FinancialRecordsModule(props: {
           </div>
         </div>
       </footer>
+      {creatingRecord && (
+        <FinancialRecordCreateModal
+          customerOptions={customerOptions}
+          onClose={() => setCreatingRecord(false)}
+          onCreateInvoice={props.onCreateInvoice}
+          onCreateReceipt={props.onCreateReceipt}
+        />
+      )}
       {editingReceipt && (
         <ReceiptRecordEditModal
           allocatedAmount={getReceiptAllocatedAmount(editingReceipt.id, props.allocations)}
@@ -5957,26 +6123,6 @@ function ReceiptPoolModal(props: {
     setRows((currentRows) => currentRows.map((row) => (row.id === rowId ? { ...row, ...patch } : row)));
   }
 
-  function addRow() {
-    setRows((currentRows) => {
-      const nextRows = [
-        ...currentRows,
-        {
-          id: createId("receipt"),
-          receiptDate: getTodayString(),
-          amount: "",
-          method: "银行转账" as PaymentMethod,
-          isLocked: false,
-          transactionNo: "",
-          note: "",
-          isNew: true,
-        },
-      ];
-      setCurrentPage(Math.ceil(nextRows.length / RECEIPT_POOL_PAGE_SIZE));
-      return nextRows;
-    });
-  }
-
   function deleteRow(row: ReceiptPoolRow) {
     if (row.isLocked) return;
     const allocatedAmount = getReceiptAllocatedAmount(row.id, props.allocations);
@@ -6168,15 +6314,11 @@ function ReceiptPoolModal(props: {
               })}
             </tbody>
           </table>
-          {rows.length === 0 && <EmptyPanel text="当前客户暂无收款记录，可点击新增一行录入。" />}
+          {rows.length === 0 && <EmptyPanel text="当前客户暂无收款记录，可在财务明细中新增。" />}
         </div>
         <div className="receipt-pool__below">
           <div className="receipt-pool__below-actions">
-            <button className="recon-button recon-button-light" onClick={addRow} type="button">
-              <Plus size={16} />
-              新增一行
-            </button>
-            <span className="receipt-pool__count">共 {rows.length} 笔收款</span>
+            <span className="receipt-pool__count">共 {rows.length} 笔收款（收款请在财务明细中新增）</span>
           </div>
           {error && <span className="receipt-pool__error">{error}</span>}
           <div className="receipt-pool__pagination" aria-label="收款池分页">
@@ -6304,25 +6446,6 @@ function InvoicePoolModal(props: {
     setRows((currentRows) => currentRows.map((row) => (row.id === rowId ? { ...row, ...patch } : row)));
   }
 
-  function addRow() {
-    setRows((currentRows) => {
-      const nextRows = [
-        ...currentRows,
-        {
-          id: createId("invoice"),
-          invoiceDate: getTodayString(),
-          invoiceNo: "",
-          amount: "",
-          isLocked: false,
-          note: "",
-          isNew: true,
-        },
-      ];
-      setCurrentPage(Math.ceil(nextRows.length / RECEIPT_POOL_PAGE_SIZE));
-      return nextRows;
-    });
-  }
-
   function deleteRow(row: InvoicePoolRow) {
     if (row.isLocked) return;
     setPendingConfirmation({ allocatedAmount: getInvoiceAllocatedAmount(row.id, props.allocations), rowId: row.id, type: "delete" });
@@ -6434,12 +6557,11 @@ function InvoicePoolModal(props: {
                 })}
               </tbody>
             </table>
-            {rows.length === 0 && <EmptyPanel text="当前客户暂无开票记录，可点击新增一行录入。" />}
+            {rows.length === 0 && <EmptyPanel text="当前客户暂无开票记录，可在财务明细中新增。" />}
           </div>
           <div className="receipt-pool__below">
             <div className="receipt-pool__below-actions">
-              <button className="recon-button recon-button-light" onClick={addRow} type="button"><Plus size={16} />新增一行</button>
-              <span className="receipt-pool__count">共 {rows.length} 笔开票</span>
+              <span className="receipt-pool__count">共 {rows.length} 笔开票（开票请在财务明细中新增）</span>
             </div>
             {error && <span className="receipt-pool__error">{error}</span>}
             <div className="receipt-pool__pagination" aria-label="开票池分页">
