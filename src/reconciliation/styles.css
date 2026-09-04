@@ -888,7 +888,28 @@
   gap: 12px;
 }
 
-.recon-form-hint {
+.recon-static-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border: 1px solid #dbe3ee;
+  border-radius: 6px;
+  padding: 9px 11px;
+  background: #f6f8fc;
+}
+
+.recon-static-field span {
+  color: #546275;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.recon-static-field strong {
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.recon-form-hint {.recon-form-hint {
   margin: 0;
   color: #6f7f93;
   font-size: 12px;

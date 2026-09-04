@@ -6081,7 +6081,8 @@ function StatementItemModal(props: {
   statements: MonthlyStatement[];
   styleAccount?: StyleAccount;
 }) {
-  const [statementId, setStatementId] = useState(props.item?.statementId ?? props.statementId);
+  const statementId = props.item?.statementId ?? props.statementId;
+  const currentStatement = props.statements.find((statement) => statement.id === statementId);
   const [styleNo, setStyleNo] = useState(props.styleAccount?.styleNo ?? "");
   const [amount, setAmount] = useState(props.item ? String(props.item.receivableAmount) : "");
   const [note, setNote] = useState(props.item?.note ?? "");
@@ -6102,14 +6103,10 @@ function StatementItemModal(props: {
           });
         }}
       >
-        <Field label="归属月份 / 月度对账单" required>
-          <AnimatedSelect
-            ariaLabel="归属月份 / 月度对账单"
-            onChange={setStatementId}
-            options={props.statements.map((statement) => ({ label: `${statement.periodMonth} / ${statement.status}`, value: statement.id }))}
-            value={statementId}
-          />
-        </Field>
+        <div className="recon-static-field">
+          <span>归属月份 / 月度对账单</span>
+          <strong>{currentStatement ? `${currentStatement.periodMonth} · ${currentStatement.status}` : "未找到月度对账单"}</strong>
+        </div>
         <Field label="款号" required>
           <input onChange={(event) => setStyleNo(event.target.value)} placeholder="输入款号" value={styleNo} />
         </Field>
