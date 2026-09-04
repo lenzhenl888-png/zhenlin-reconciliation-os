@@ -6648,7 +6648,7 @@ function SettlementModal(props: {
 
   return (
     <Modal onClose={props.onClose} size="receiptPool" title="收款核销">
-      <>
+      <div className="settlement-modal-body">
         <div className="settlement-summary">
           <div>
             <span>本笔收款</span>
@@ -6702,7 +6702,11 @@ function SettlementModal(props: {
           <tbody>
             {openRows.length === 0 ? (
               <tr>
-                <td colSpan={8}>该客户没有未结清的月度对账单，这笔收款将保留在未核销收款中。</td>
+                <td colSpan={8}>
+                  {statementRows.length === 0
+                    ? "该客户还没有月度对账单，无法核销；这笔收款将保留在未核销收款中。"
+                    : "该客户所有月度对账单均已结清（部分历史账期因超额核销余额为负，不参与核销）；这笔收款将保留在未核销收款中。"}
+                </td>
               </tr>
             ) : (
               openRows.map(({ summary, dueInfo }) => (
@@ -6745,7 +6749,7 @@ function SettlementModal(props: {
           确认核销
         </button>
       </div>
-      </>
+      </div>
     </Modal>
   );
 }
