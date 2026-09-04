@@ -2,9 +2,11 @@ import { useEffect, useMemo, useRef, useState, type ChangeEvent, type FormEvent,
 import {
   AlertTriangle,
   Banknote,
+  CalendarDays,
   BarChart3,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   CreditCard,
   Eye,
   FileCog,
@@ -562,6 +564,14 @@ export function ReconciliationApp() {
       .sort((left, right) => right.closingBalanceTotal - left.closingBalanceTotal || left.customerName.localeCompare(right.customerName, "zh-Hans-CN"));
   }, [filters.customerName, store]);
   const allSummary = summarizeAll(store.customers, store);
+  const markedPeriods = useMemo(() => {
+    const statementIds = new Set(
+      store.statementItems.filter((item) => item.customerId === selectedCustomerId).map((item) => item.statementId),
+    );
+    return store.monthlyStatements
+      .filter((statement) => statement.customerId === selectedCustomerId && statementIds.has(statement.id))
+      .map((statement) => statement.periodMonth);
+  }, [selectedCustomerId, store]);
 
   function updateStore(updater: (currentStore: typeof store) => typeof store) {
     setStore((currentStore) => {
@@ -1806,7 +1816,6 @@ export function ReconciliationApp() {
               selectedStatement &&
               setModal({ type: "statementItem", customerId: selectedStatement.customerId, statementId: selectedStatement.id })
             }
-            onAddStatement={() => setModal({ type: "statement", customerId: selectedCustomerId })}
             onOpenReceiptPool={() => selectedCustomerId && setModal({ type: "receiptPool", customerId: selectedCustomerId })}
             onOpenInvoicePool={() => selectedCustomerId && setModal({ type: "invoicePool", customerId: selectedCustomerId })}
             onApplyFilters={() => setFilters(draftFilters)}
@@ -1835,8 +1844,22 @@ export function ReconciliationApp() {
               setFilters(nextFilters);
             }}
             onPeriodChange={(period) => {
+              const existingStatement = store.monthlyStatements.find(
+                (statement) => statement.customerId === selectedCustomerId && statement.periodMonth === period,
+              );
+              if (!existingStatement) {
+                // 系统默认每个月都有月账单：进入没有月度单的月份时按默认规则自动创建。
+                createStatement({
+                  customerId: selectedCustomerId,
+                  periodMonth: period,
+                  openingBalance: getDefaultOpeningBalance(selectedCustomerId, period, store),
+                  dueDate: suggestDueDate(period, getCustomerProfile(selectedCustomerId, store)?.paymentTermDays),
+                  note: "",
+                });
+              } else {
+                setSelectedPeriod(period);
+              }
               const nextFilters = { ...draftFilters, customerName: "", styleNo: "" };
-              setSelectedPeriod(period);
               setDraftFilters(nextFilters);
               setFilters(nextFilters);
             }}
@@ -1847,7 +1870,7 @@ export function ReconciliationApp() {
             onSelectCustomer={setSelectedCustomerId}
             onSelectItem={setSelectedItemId}
             onSetDetailTab={setDetailTab}
-            periods={periods}
+            markedPeriods={markedPeriods}
             receipts={store.customerReceipts}
             receiptAllocations={store.receiptAllocations}
             customerInvoices={store.customerInvoices ?? []}
@@ -2071,7 +2094,6 @@ function CustomerStatementPanel(props: {
   draftFilters: Filters;
   filteredItems: NonNullable<ReturnType<typeof summarizeStatement>["items"]>;
   onAddItem(): void;
-  onAddStatement(): void;
   onOpenInvoicePool(): void;
   onOpenReceiptPool(): void;
   onApplyFilters(): void;
@@ -2095,7 +2117,7 @@ function CustomerStatementPanel(props: {
   onSelectCustomer(customerId: string): void;
   onSelectItem(itemId: string): void;
   onSetDetailTab(tab: DetailTab): void;
-  periods: string[];
+  markedPeriods: string[];
   receiptAllocations: ReceiptAllocation[];
   receipts: CustomerReceipt[];
   customerInvoices: CustomerInvoice[];
@@ -2212,10 +2234,10 @@ function CustomerStatementPanel(props: {
             </div>
             <div className="recon-statement-filter-actions">
               <label>
-                <AnimatedSelect
+                <MonthCalendarPicker
                   ariaLabel="对账月份"
+                  markedMonths={props.markedPeriods}
                   onChange={props.onPeriodChange}
-                  options={toSelectOptions(props.periods)}
                   value={props.selectedPeriod}
                 />
               </label>
@@ -2229,10 +2251,6 @@ function CustomerStatementPanel(props: {
                   value={props.draftFilters.status}
                 />
               </label>
-              <button className="recon-button recon-button-primary" onClick={props.onAddStatement} type="button">
-                <Plus size={16} />
-                新增月度对账单
-              </button>
             </div>
             <div className="recon-topbar-actions recon-statement-actions">
               <div className="recon-statement-actions-left">
@@ -2317,7 +2335,12 @@ function CustomerStatementPanel(props: {
           </div>
 
           {!props.statement ? (
-            <EmptyPanel text="当前客户在该月份还没有月度对账单，请先新增月度对账单。" />
+            <div className="recon-empty">
+              <span>当前客户在 {props.selectedPeriod} 还没有月度对账单。</span>
+              <button className="recon-button recon-button-primary" onClick={() => props.onPeriodChange(props.selectedPeriod)} type="button">
+                建立 {props.selectedPeriod} 月度对账单
+              </button>
+            </div>
           ) : (
             <>
               <div className="recon-table-wrap recon-style-table-wrap">
@@ -4632,6 +4655,92 @@ function FinancialInvoiceEditModal(props: {
         </>
       </form>
     </Modal>
+  );
+}
+
+function MonthCalendarPicker(props: { ariaLabel?: string; markedMonths: string[]; onChange(period: string): void; value: string }) {
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  const [isOpen, setIsOpen] = useState(false);
+  const [viewYear, setViewYear] = useState(() => Number(props.value.slice(0, 4)) || new Date().getFullYear());
+  const markedMonths = useMemo(() => new Set(props.markedMonths), [props.markedMonths]);
+  const currentPeriod = getTodayString().slice(0, 7);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setIsOpen(false);
+    };
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [isOpen]);
+
+  function openCalendar() {
+    setViewYear(Number(props.value.slice(0, 4)) || new Date().getFullYear());
+    setIsOpen(true);
+  }
+
+  function pick(year: number, month: number) {
+    props.onChange(`${year}-${String(month).padStart(2, "0")}`);
+    setIsOpen(false);
+  }
+
+  return (
+    <div className={`month-calendar ${isOpen ? "is-open" : ""}`} ref={rootRef}>
+      <button
+        aria-label={props.ariaLabel}
+        aria-expanded={isOpen}
+        className="animated-select-trigger month-calendar-trigger"
+        onClick={() => (isOpen ? setIsOpen(false) : openCalendar())}
+        type="button"
+      >
+        <CalendarDays size={16} />
+        <span>{props.value}</span>
+        <ChevronDown size={17} />
+      </button>
+
+      {isOpen && (
+        <div className="animated-select-popover month-calendar-popover">
+          <div className="month-calendar-head">
+            <button aria-label="上一年" onClick={() => setViewYear((year) => year - 1)} type="button">
+              <ChevronLeft size={15} />
+            </button>
+            <strong>{viewYear}年</strong>
+            <button aria-label="下一年" onClick={() => setViewYear((year) => year + 1)} type="button">
+              <ChevronRight size={15} />
+            </button>
+          </div>
+          <div className="month-calendar-grid">
+            {Array.from({ length: 12 }, (_, index) => index + 1).map((month) => {
+              const period = `${viewYear}-${String(month).padStart(2, "0")}`;
+              const classes = [
+                "month-calendar-month",
+                markedMonths.has(period) ? "is-marked" : "",
+                period === props.value ? "is-selected" : "",
+                period === currentPeriod ? "is-current" : "",
+              ]
+                .filter(Boolean)
+                .join(" ");
+              return (
+                <button className={classes} key={month} onClick={() => pick(viewYear, month)} type="button">
+                  {month}月
+                </button>
+              );
+            })}
+          </div>
+          <button
+            className="month-calendar-today"
+            onClick={() => {
+              const year = Number(currentPeriod.slice(0, 4));
+              setViewYear(year);
+              pick(year, Number(currentPeriod.slice(5, 7)));
+            }}
+            type="button"
+          >
+            回到本月（{currentPeriod}）
+          </button>
+        </div>
+      )}
+    </div>
   );
 }
 

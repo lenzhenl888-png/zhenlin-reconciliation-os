@@ -772,6 +772,122 @@
   font-weight: 700;
 }
 
+.month-calendar {
+  position: relative;
+  width: 100%;
+  min-width: 170px;
+}
+
+.month-calendar-trigger {
+  justify-content: flex-start;
+  gap: 8px;
+}
+
+.month-calendar-trigger span {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.month-calendar-popover {
+  width: 252px;
+  padding: 12px;
+}
+
+.month-calendar-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.month-calendar-head strong {
+  font-size: 14px;
+  font-weight: 900;
+}
+
+.month-calendar-head button {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  place-items: center;
+  border: 1px solid #cfd7e3;
+  border-radius: 6px;
+  background: #fbfcfe;
+  color: #172033;
+  cursor: pointer;
+}
+
+.month-calendar-head button:hover {
+  border-color: #3b82f6;
+}
+
+.month-calendar-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+
+.month-calendar-month {
+  min-height: 34px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  border-radius: 6px;
+  background: #f6f8fc;
+  color: #172033;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.month-calendar-month:hover {
+  border-color: #3b82f6;
+  background: #eef6ff;
+}
+
+.month-calendar-month.is-marked {
+  border-color: #4ade80;
+  background: #ecfdf5;
+  color: #15803d;
+}
+
+.month-calendar-month.is-selected {
+  border-color: #2563eb;
+  background: linear-gradient(135deg, #dbeafe, #e0f2fe);
+  box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.35);
+}
+
+.month-calendar-month.is-current {
+  outline: 1.5px dashed #94a3b8;
+  outline-offset: 1px;
+}
+
+.month-calendar-today {
+  width: 100%;
+  margin-top: 10px;
+  min-height: 32px;
+  border: 1px solid #cfd7e3;
+  border-radius: 6px;
+  background: #fbfcfe;
+  color: #172033;
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.month-calendar-today:hover {
+  border-color: #3b82f6;
+  background: #eef6ff;
+}
+
+.recon-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+
 .recon-form-hint {
   margin: 0;
   color: #6f7f93;
